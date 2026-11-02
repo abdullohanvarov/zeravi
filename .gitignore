@@ -46,3 +46,20 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Local tooling and credentials
+.vscode/
+.agents/
+.codex/
+.aws/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.venv/
+__pycache__/

@@ -21,7 +21,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [storeProvider.overrideWith((ref) async => store)],
-        child: const ZeraviApp(),
+        child: const ZeraviApp(nativeDragEnabled: false),
       ),
     );
     await tester.pumpAndSettle();

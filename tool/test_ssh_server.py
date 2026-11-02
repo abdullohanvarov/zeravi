@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 import asyncssh
 
 async def main():
@@ -32,7 +33,40 @@ async def main():
                 return username == 'tester' and key == client_key.convert_to_public()
         async def shell(process):
             if process.command:
-                process.stdout.write('command ok\n')
+                if '__Z_HOST__' in process.command:
+                    ticks = int(time.monotonic() * 100)
+                    process.stdout.write(f'''__Z_HOST__
+zeravi-fixture
+Linux 6.8.0-test
+__Z_CPU__
+cpu {ticks * 3} 0 100 {ticks * 7} 0 0 0 0 0 0
+__Z_MEM__
+MemTotal: 4194304 kB
+MemAvailable: 2621440 kB
+SwapTotal: 1048576 kB
+SwapFree: 917504 kB
+__Z_LOAD__
+0.30 0.20 0.10 1/100 200
+__Z_UPTIME__
+86460.00 1000.00
+__Z_NET__
+Inter-| Receive | Transmit
+ face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed
+eth0: {ticks * 2048} 1 0 0 0 0 0 0 {ticks * 1024} 1 0 0 0 0 0 0
+__Z_ROUTE__
+Iface Destination Gateway Flags RefCnt Use Metric Mask
+eth0 00000000 0100000A 0003 0 0 100 00000000
+__Z_DISK__
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/vda1 20971520 8388608 12582912 40% /
+__Z_PS__
+PID %CPU %MEM COMMAND
+101 12.3 4.2 python3
+102 3.1 1.4 node
+__Z_END__
+''')
+                else:
+                    process.stdout.write('command ok\n')
                 process.exit(0)
                 return
             process.stdout.write('Zeravi test shell ready\r\n')

@@ -8,6 +8,9 @@ import 'connection.dart';
 
 class AppStore {
   AppStore(this.database) {
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+    );
     database.execute('''CREATE TABLE IF NOT EXISTS connections (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL,
       username TEXT NOT NULL, port INTEGER NOT NULL, auth_method TEXT NOT NULL,
@@ -55,6 +58,18 @@ class AppStore {
         'INSERT INTO trusted_hosts (host, port, key_type, fingerprint) VALUES (?, ?, ?, ?)',
         [host.toLowerCase(), port, type, fingerprint],
       );
+
+  String? setting(String key) {
+    final result = database.select('SELECT value FROM settings WHERE key = ?', [
+      key,
+    ]);
+    return result.isEmpty ? null : result.first['value'] as String;
+  }
+
+  void setSetting(String key, String value) => database.execute(
+    'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
+    [key, value],
+  );
 
   void close() => database.close();
 }

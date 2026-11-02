@@ -1,0 +1,58 @@
+# Architecture
+
+Zeravi's Flutter GUI runs locally. `dartssh2` connects directly to the server;
+SFTP handles files and read-only SSH commands collect Linux monitoring data.
+No Zeravi backend or server agent is required.
+
+| Location | Responsibility |
+| --- | --- |
+| `lib/main.dart` | Riverpod bootstrap, startup errors, persisted theme |
+| `lib/data/app_store.dart` | SQLite profiles, trusted host keys and preferences |
+| `lib/data/file_view.dart` | File filtering, sort order and browsing preferences |
+| `lib/services/remote_session.dart` | SSH/SFTP lifecycle, editor operations, VS Code launch |
+| `lib/services/file_transfer.dart` | Recursive preflight, collision checks and staged copies |
+| `lib/services/export_cache.dart` | Completed local copies for native file-manager exports |
+| `lib/services/server_monitor.dart` | Bounded Linux probes, snapshot parsing, deltas and polling |
+| `lib/ui/workspace.dart` | Navigation, file browser, editor, shortcuts and user prompts |
+| `lib/ui/server_dashboard.dart` | Resource cards, history, filesystem and process tables |
+| `lib/ui/transfer_widgets.dart` | Lazy native file-URI drag provider |
+| `lib/ui/ssh_terminal.dart` | Independent SSH channels and terminal lifecycle |
+
+## Monitoring
+
+A static read-only command reads Linux `/proc` files, `uname`, `df` and `ps`.
+User-provided strings are never interpolated into that command. CPU usage is the
+difference of successive CPU counters; guest counters are excluded to avoid
+counting guest work twice. Memory usage is total minus available. Network rates
+use counter deltas for the default interface when available, with an interface
+name displayed. Counter resets produce an unavailable rate, not a negative rate.
+
+Only one probe runs at a time. Commands are bounded by a timeout and collected
+output is capped. Monitoring stops on disconnect/disposal, can be paused, and
+retains the last successful snapshot if a later probe fails. Process command
+names are shown without full argument strings. Polling does not require sudo.
+
+## Native file-manager transfers
+
+`desktop_drop` receives incoming OS file paths. The browser identifies the folder
+under the drop pointer or uses the current directory. Uploads use the same
+preflight and staged transfer engine as menu-based uploads.
+
+`super_drag_and_drop` supplies an outgoing lazy `fileUri`. The provider downloads
+the selected remote file/tree to a private temporary directory, then resolves to
+a local URI only after successful completion. Requests within one drag share one
+preparation future. Only copy operations are offered. Export copies survive drag
+completion so Nautilus can finish reading; stale copies are cleaned after 24h on
+a subsequent export. Failed preparation cleans its staging directory.
+
+Tests cover the export boundary and incoming platform messages; native desktop
+handshakes require a physical desktop smoke check.
+
+## Persistence and identity
+
+SQLite holds connection metadata, key-file references, trusted fingerprints and
+preferences. A settings table is added without changing existing profile data.
+Passwords/passphrases and private-key contents are not stored. Unknown hosts
+require explicit trust, changed keys are rejected, and the system's SSH config
+and known-hosts files are not rewritten. VS Code receives a separately passed
+encoded URI using an existing user-provided SSH alias.

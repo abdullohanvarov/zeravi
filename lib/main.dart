@@ -16,13 +16,14 @@ void main() {
 }
 
 class ZeraviApp extends ConsumerStatefulWidget {
-  const ZeraviApp({super.key});
+  const ZeraviApp({super.key, this.nativeDragEnabled = true});
+  final bool nativeDragEnabled;
   @override
   ConsumerState<ZeraviApp> createState() => _ZeraviAppState();
 }
 
 class _ZeraviAppState extends ConsumerState<ZeraviApp> {
-  ThemeMode themeMode = ThemeMode.dark;
+  ThemeMode? themeMode;
 
   ThemeData theme(Brightness brightness) {
     final dark = brightness == Brightness.dark;
@@ -54,16 +55,30 @@ class _ZeraviAppState extends ConsumerState<ZeraviApp> {
     debugShowCheckedModeBanner: false,
     theme: theme(Brightness.light),
     darkTheme: theme(Brightness.dark),
-    themeMode: themeMode,
+    themeMode:
+        themeMode ??
+        (ref.watch(storeProvider).asData?.value.setting('theme') == 'light'
+            ? ThemeMode.light
+            : ThemeMode.dark),
     home: ref
         .watch(storeProvider)
         .when(
           data: (store) => Workspace(
             store: store,
+            nativeDragEnabled: widget.nativeDragEnabled,
             onToggleTheme: () => setState(() {
-              themeMode = themeMode == ThemeMode.dark
+              final current =
+                  themeMode ??
+                  (store.setting('theme') == 'light'
+                      ? ThemeMode.light
+                      : ThemeMode.dark);
+              themeMode = current == ThemeMode.dark
                   ? ThemeMode.light
                   : ThemeMode.dark;
+              store.setSetting(
+                'theme',
+                themeMode == ThemeMode.light ? 'light' : 'dark',
+              );
             }),
           ),
           loading: () =>

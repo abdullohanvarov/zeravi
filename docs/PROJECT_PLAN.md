@@ -85,3 +85,16 @@ with per-batch byte progress. Sources are retained.
 Tests cover real SSH tree roundtrips, collisions, changed destinations, symlink
 handling and actual UI drag gestures, native drop events and overwrite prompts.
 Direct native drag-out into an external file manager remains future work.
+
+## Native desktop and administration iteration
+
+The embedded local file browser has been removed. Zeravi integrates with the
+system file manager for incoming drops and lazy staged native exports. The app
+now opens on a Linux overview with resource metrics, CPU history, filesystem
+capacity and top-process information. File browsing adds persisted sort/visibility
+preferences, history navigation, file details, copy paths, shortcuts and a
+hideable terminal that retains live shells. See USER_EXPECTATIONS.md for scope.
+
+The static monitoring command and model parsers are tested with synthetic Linux
+data. Export tests verify complete file/folder trees before URI handoff. Actual
+Nautilus drag gestures remain part of the manual desktop smoke test.

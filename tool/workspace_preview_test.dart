@@ -1,4 +1,5 @@
-// Optional real-server UI smoke test and preview renderer. See README.md.
+// UI previews use a disposable SSH server; native outgoing drag is validated at
+// the export service boundary. A physical Nautilus drag needs a desktop session.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -12,63 +13,50 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:zeravi/data/app_store.dart';
 import 'package:zeravi/data/connection.dart';
 import 'package:zeravi/main.dart';
+import 'package:zeravi/ui/transfer_widgets.dart';
 
 void main() {
   const fixturePath = String.fromEnvironment('SSH_FIXTURE');
   testWidgets(
-    'render onboarding and exercise the connected desktop workspace',
+    'server overview, native import/export, browsing preferences and editor',
     (tester) async {
       await tester.runAsync(() async {
-        final font = File(
-          '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-        );
-        if (await font.exists()) {
-          final loader = FontLoader('sans')
-            ..addFont(
-              font.readAsBytes().then((bytes) => ByteData.sublistView(bytes)),
-            );
-          await loader.load();
+        for (final font in {
+          'sans':
+              '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+          'monospace':
+              '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
+        }.entries) {
+          final file = File(font.value);
+          if (await file.exists()) {
+            await (FontLoader(
+              font.key,
+            )..addFont(file.readAsBytes().then(ByteData.sublistView))).load();
+          }
         }
-        final mono = File(
-          '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
-        );
-        if (await mono.exists()) {
-          final loader = FontLoader('monospace')
-            ..addFont(
-              mono.readAsBytes().then((bytes) => ByteData.sublistView(bytes)),
-            );
-          await loader.load();
-        }
-        final icons = FontLoader('MaterialIcons')
-          ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
-        await icons.load();
+        await (FontLoader(
+          'MaterialIcons',
+        )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
         final store = AppStore(sqlite3.openInMemory());
-        tester.view.physicalSize = const Size(1440, 900);
+        tester.view.physicalSize = const Size(1440, 1000);
         tester.view.devicePixelRatio = 1;
         final boundaryKey = GlobalKey();
         await tester.pumpWidget(
           ProviderScope(
             overrides: [storeProvider.overrideWith((ref) async => store)],
-            child: RepaintBoundary(key: boundaryKey, child: const ZeraviApp()),
+            child: RepaintBoundary(
+              key: boundaryKey,
+              child: const ZeraviApp(nativeDragEnabled: false),
+            ),
           ),
         );
         Future<void> tick() async {
           await Future<void>.delayed(const Duration(milliseconds: 120));
           await tester.pump(const Duration(milliseconds: 120));
-          final errors = tester
-              .widgetList<Text>(
-                find.descendant(
-                  of: find.byType(SnackBar),
-                  matching: find.byType(Text),
-                ),
-              )
-              .map((w) => w.data)
-              .join(' ');
-          if (errors.isNotEmpty && !errors.startsWith('Copied ')) fail(errors);
         }
 
         Future<void> until(Finder finder) async {
-          for (var i = 0; i < 80 && finder.evaluate().isEmpty; i++) {
+          for (var i = 0; i < 100 && finder.evaluate().isEmpty; i++) {
             await tick();
           }
           expect(
@@ -76,43 +64,48 @@ void main() {
             findsWidgets,
             reason: tester
                 .widgetList<Text>(find.byType(Text))
-                .map((widget) => widget.data)
+                .map((w) => w.data)
                 .join(' | '),
           );
           await tick();
         }
 
-        Future<void> screenshot(String name) async {
+        Future<void> shot(String name) async {
+          final ctx = find.byType(Scaffold).first.evaluate().first;
+          ScaffoldMessenger.of(ctx).clearSnackBars();
+          await tick();
           await tick();
           final boundary =
               boundaryKey.currentContext!.findRenderObject()!
                   as RenderRepaintBoundary;
           final image = await boundary.toImage();
           final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-          final output = File('build/previews/$name.png');
-          await output.parent.create(recursive: true);
-          await output.writeAsBytes(bytes!.buffer.asUint8List());
+          final file = File('build/previews/$name.png');
+          await file.parent.create(recursive: true);
+          await file.writeAsBytes(bytes!.buffer.asUint8List());
           image.dispose();
         }
 
         await until(find.text('Connect your first server'));
-        await screenshot('zeravi-welcome');
+        await shot('zeravi-welcome');
         if (fixturePath.isNotEmpty) {
           final fixture = jsonDecode(
             await File(fixturePath).readAsString(),
           ) as Map<String, dynamic>;
-          final serverPreview = await Directory(
-            '${fixture['root']}/ui-${DateTime.now().microsecondsSinceEpoch}',
+          final remoteRoot = await Directory(
+            '${fixture['root']}/admin-ui-${DateTime.now().microsecondsSinceEpoch}',
           ).create();
-          await File('${serverPreview.path}/hello.txt')
-              .writeAsString('Preview text\n');
-          await Directory('${serverPreview.path}/folder').create();
-          final remotePreviewPath = '/${serverPreview.path.split('/').last}';
+          final remotePath = '/${remoteRoot.path.split('/').last}';
+          await Directory('${remoteRoot.path}/folder').create();
+          await File('${remoteRoot.path}/hello.txt')
+              .writeAsString('Hello from Zeravi\n');
+          await File('${remoteRoot.path}/.env')
+              .writeAsString('TEST_ONLY=yes\n');
           await tester.tap(find.byTooltip('Add server'));
           await tick();
           await tester.enterText(
             find.widgetWithText(TextFormField, 'Connection name'),
-            'Local test server',
+            'Development server',
           );
           await tester.enterText(
             find.widgetWithText(TextFormField, 'Hostname or IP'),
@@ -129,9 +122,9 @@ void main() {
           await tester.tap(find.text('Password'));
           await tick();
           await tester.tap(find.text('Save connection'));
-          await until(find.text('Connect to Local test server'));
+          await until(find.text('Connect to Development server'));
           expect(store.connections().single.authMethod, AuthMethod.password);
-          await tester.tap(find.text('Connect to Local test server'));
+          await tester.tap(find.text('Connect to Development server'));
           await tick();
           await tester.enterText(
             find.widgetWithText(TextField, 'Password'),
@@ -140,137 +133,57 @@ void main() {
           await tester.tap(find.widgetWithText(FilledButton, 'Connect'));
           await until(find.text('Trust and connect'));
           await tester.tap(find.text('Trust and connect'));
-          await until(find.text('VPS FILES'));
+          await until(find.text('zeravi-fixture'));
+          await tester.tap(find.byTooltip('Hide terminal panel'));
+          await tick();
+          await tester.tap(find.byType(DropdownButton<int>));
+          await tick();
+          await tester.tap(find.text('Every 2s').last);
+          await tick();
+          await until(find.text('30.0%'));
+          await shot('zeravi-overview');
+          expect(tester.takeException(), isNull);
+          await tester.tap(find.byTooltip('Pause monitoring'));
+          await tick();
+          expect(find.text('Monitoring paused'), findsOneWidget);
+          await tester.tap(find.text('Files'));
+          await tick();
+          expect(find.text('LOCAL FILES'), findsNothing);
           await tester.enterText(
             find.byKey(const ValueKey('remote-path')),
-            remotePreviewPath,
+            remotePath,
           );
           await tester.testTextInput.receiveAction(TextInputAction.done);
           await until(find.text('hello.txt'));
-          final localTransferRoot = await Directory.systemTemp.createTemp(
-            'zeravi-ui-drop-',
-          );
-          await Directory('${localTransferRoot.path}/drag-upload/nested/empty')
-              .create(recursive: true);
-          final uploadPath = '${localTransferRoot.path}/drag-upload';
-          await File('$uploadPath/nested/note.txt')
-              .writeAsString('Drag and drop roundtrip');
-          await File('${localTransferRoot.path}/single.txt')
-              .writeAsString('Single file upload');
-          final downloadTarget = await Directory(
-            '${localTransferRoot.path}/download-target',
-          ).create();
-          await tester.enterText(
-            find.byKey(const ValueKey('local-path')),
-            localTransferRoot.path,
-          );
-          await tester.testTextInput.receiveAction(TextInputAction.done);
-          await until(find.byKey(ValueKey('local-entry-$uploadPath')));
-          Future<void> drag(Finder source, Offset target) async {
-            final gesture = await tester.startGesture(tester.getCenter(source));
-            await gesture.moveBy(const Offset(20, 0));
-            await tick();
-            await gesture.moveTo(target);
-            await tick();
-            await gesture.up();
-            await tick();
-          }
-
-          final remoteZone = find.byKey(const ValueKey('remote-drop-zone'));
-          final remoteTree = find.descendant(
-            of: remoteZone,
-            matching: find.text('drag-upload'),
-          );
-          await drag(
-            find.byKey(ValueKey('local-entry-$uploadPath')),
-            tester.getBottomRight(remoteZone) - const Offset(24, 24),
-          );
-          await until(remoteTree);
-          expect(
-            await File('${serverPreview.path}/drag-upload/nested/note.txt')
-                .readAsString(),
-            'Drag and drop roundtrip',
-          );
-          expect(
-            await Directory('${serverPreview.path}/drag-upload/nested/empty')
-                .exists(),
-            isTrue,
-          );
-          await drag(
-            find.byKey(ValueKey('remote-entry-$remotePreviewPath/drag-upload')),
-            tester.getCenter(
-              find.byKey(ValueKey('local-entry-${downloadTarget.path}')),
+          expect(find.text('.env'), findsNothing);
+          await tester.tap(find.byTooltip('Show dot files (Ctrl+H)'));
+          await until(find.text('.env'));
+          await tester.tap(find.byTooltip('Sort and view options'));
+          await tick();
+          await tick();
+          await tick();
+          await tick();
+          await tester.tap(
+            find.ancestor(
+              of: find.text('Sort by size'),
+              matching: find.byType(CheckedPopupMenuItem<String>),
             ),
           );
-          for (
-            var i = 0;
-            i < 80 &&
-                !await File(
-                  '${downloadTarget.path}/drag-upload/nested/note.txt',
-                ).exists();
-            i++
-          ) {
-            await tick();
-          }
-          expect(
-            await File('${downloadTarget.path}/drag-upload/nested/note.txt')
-                .readAsString(),
-            'Drag and drop roundtrip',
-          );
-          expect(
-            await Directory('${downloadTarget.path}/drag-upload/nested/empty')
-                .exists(),
-            isTrue,
-          );
-          await until(find.text('Copied 1 file(s) and 3 folder(s).'));
-          // Cancelling an overwrite leaves the existing server file intact.
-          await File('$uploadPath/nested/note.txt')
-              .writeAsString('Updated drag file');
-          await drag(
-            find.byKey(ValueKey('local-entry-$uploadPath')),
-            tester.getBottomRight(remoteZone) - const Offset(24, 24),
-          );
-          await until(find.text('Files already exist'));
-          await tester.tap(find.text('Cancel'));
           await tick();
-          expect(
-            await File('${serverPreview.path}/drag-upload/nested/note.txt')
-                .readAsString(),
-            'Drag and drop roundtrip',
-          );
-          await drag(
-            find.byKey(ValueKey('local-entry-$uploadPath')),
-            tester.getBottomRight(remoteZone) - const Offset(24, 24),
-          );
-          await until(find.text('Merge and replace'));
-          await tester.tap(find.text('Merge and replace'));
-          for (
-            var i = 0;
-            i < 80 &&
-                await File('${serverPreview.path}/drag-upload/nested/note.txt')
-                        .readAsString() !=
-                    'Updated drag file';
-            i++
-          ) {
-            await tick();
-          }
-          expect(
-            await File('${serverPreview.path}/drag-upload/nested/note.txt')
-                .readAsString(),
-            'Updated drag file',
-          );
           await tick();
-
-          // Exercise the native file-manager bridge with a file and folder in one drop.
-          final nativeFolder = await Directory(
-            '${localTransferRoot.path}/native-folder/empty',
-          ).create(recursive: true);
-          await File('${localTransferRoot.path}/native-folder/data.txt')
-              .writeAsString('Native folder');
-          final nativeFile = await File('${localTransferRoot.path}/native.txt')
-              .writeAsString('Native file');
-          final point =
-              tester.getBottomRight(remoteZone) - const Offset(25, 25);
+          await tick();
+          await tick();
+          await tick();
+          expect(store.setting('file_view'), contains('"sort":"size"'));
+          final localRoot = await Directory.systemTemp.createTemp(
+            'zeravi-native-ui-',
+          );
+          await Directory('${localRoot.path}/incoming/nested/empty')
+              .create(recursive: true);
+          await File('${localRoot.path}/incoming/nested/note.txt')
+              .writeAsString('Native transfer roundtrip');
+          final region = find.byKey(const ValueKey('remote-drop-zone'));
+          final point = tester.getBottomRight(region) - const Offset(28, 25);
           const codec = StandardMethodCodec();
           await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
             'desktop_drop',
@@ -280,54 +193,87 @@ void main() {
           await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
             'desktop_drop',
             codec.encodeMethodCall(
-              MethodCall('performOperation', [
-                nativeFile.path,
-                nativeFolder.parent.path,
-              ]),
+              MethodCall('performOperation', ['${localRoot.path}/incoming']),
             ),
             (_) {},
           );
-          await until(
-            find.descendant(
-              of: remoteZone,
-              matching: find.text('native-folder'),
+          await until(find.text('incoming'));
+          final intoFolder = await File('${localRoot.path}/into-folder.txt')
+              .writeAsString('Folder target');
+          final folderPoint = tester.getCenter(
+            find.byKey(ValueKey('remote-entry-$remotePath/folder')),
+          );
+          await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+            'desktop_drop',
+            codec.encodeMethodCall(
+              MethodCall('updated', [folderPoint.dx, folderPoint.dy]),
             ),
+            (_) {},
           );
-          expect(
-            await File('${serverPreview.path}/native.txt').readAsString(),
-            'Native file',
+          await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+            'desktop_drop',
+            codec.encodeMethodCall(
+              MethodCall('performOperation', [intoFolder.path]),
+            ),
+            (_) {},
           );
+          for (
+            var i = 0;
+            i < 100 &&
+                !await File('${remoteRoot.path}/folder/into-folder.txt')
+                    .exists();
+            i++
+          ) {
+            await tick();
+          }
           expect(
-            await File('${serverPreview.path}/native-folder/data.txt')
+            await File('${remoteRoot.path}/folder/into-folder.txt')
                 .readAsString(),
-            'Native folder',
+            'Folder target',
+          );
+          await tick();
+
+          expect(
+            await File('${remoteRoot.path}/incoming/nested/note.txt')
+                .readAsString(),
+            'Native transfer roundtrip',
+          );
+          // Invoke the exact lazy provider used by native file-manager exports.
+          final nativeWidget = tester
+              .widgetList<NativeExportDrag>(find.byType(NativeExportDrag))
+              .firstWhere((w) => w.name == 'incoming');
+          final uri = await nativeWidget.prepare();
+          expect(
+            await File('${uri.toFilePath()}/nested/note.txt').readAsString(),
+            'Native transfer roundtrip',
           );
           expect(
-            await Directory('${serverPreview.path}/native-folder/empty')
-                .exists(),
+            await Directory('${uri.toFilePath()}/nested/empty').exists(),
             isTrue,
           );
-          await screenshot('zeravi-transfers');
-          await tester.tap(find.text('Editor'));
-          await tick();
+          await File.fromUri(uri).parent.delete(recursive: true);
+          await shot('zeravi-files');
           await tester.tap(find.text('hello.txt'));
           await until(find.text('UTF-8  •  Plain text'));
-          expect(tester.takeException(), isNull);
-          await screenshot('zeravi-workspace');
+          await tester.tap(find.byTooltip('Show terminal panel'));
+          await tick();
           await tester.tap(find.byTooltip('New terminal'));
           await until(find.text('Shell 2'));
           await tester.tap(find.byTooltip('Close shell 2'));
           await tick();
-          expect(find.text('Shell 2'), findsNothing);
+          await shot('zeravi-workspace');
           tester.view.physicalSize = const Size(1000, 700);
           await tick();
           expect(tester.takeException(), isNull);
-          tester.view.physicalSize = const Size(1440, 900);
+          await tester.tap(find.text('Overview'));
+          await tick();
+          expect(tester.takeException(), isNull);
+          tester.view.physicalSize = const Size(1440, 1000);
           await tick();
           await tester.tap(find.text('Disconnect'));
-          await until(find.text('Connect to Local test server'));
-          await localTransferRoot.delete(recursive: true);
-          await serverPreview.delete(recursive: true);
+          await until(find.text('Connect to Development server'));
+          await localRoot.delete(recursive: true);
+          await remoteRoot.delete(recursive: true);
         }
         await tester.pumpWidget(const SizedBox());
         await tick();

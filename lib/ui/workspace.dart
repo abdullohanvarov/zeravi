@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:dartssh2/dartssh2.dart';
@@ -12,7 +13,10 @@ import '../data/app_store.dart';
 import '../data/connection.dart';
 import '../services/remote_session.dart';
 import '../services/file_transfer.dart';
-import 'local_files.dart';
+import '../data/file_view.dart';
+import '../services/server_monitor.dart';
+import '../services/export_cache.dart';
+import 'server_dashboard.dart';
 import 'transfer_widgets.dart';
 import 'connection_dialog.dart';
 import 'ssh_terminal.dart';
@@ -22,7 +26,9 @@ class Workspace extends StatefulWidget {
     super.key,
     required this.store,
     required this.onToggleTheme,
+    this.nativeDragEnabled = true,
   });
+  final bool nativeDragEnabled;
   final AppStore store;
   final VoidCallback onToggleTheme;
   @override
@@ -54,9 +60,17 @@ class _WorkspaceState extends State<Workspace> {
   int nextTerminal = 1;
   final terminalIds = <int>[];
   int activeTerminal = 0;
-  final localFilesKey = GlobalKey<LocalFilesPaneState>();
-  String? localDirectory;
-  bool transferView = true;
+  late final viewSettings = FileViewSettings.load(widget.store);
+  ServerMonitor? monitor;
+  final exports = ExportCache();
+  String workspaceView = 'overview';
+  final pathFocus = FocusNode();
+  final filterFocus = FocusNode();
+  final history = <String>[];
+  int historyIndex = -1;
+  String? homePath;
+  final folderDropKeys = <String, GlobalKey>{};
+  String? nativeDropPath;
   bool nativeHover = false;
   double fileWidth = 330;
   double terminalHeight = 240;
@@ -86,7 +100,10 @@ class _WorkspaceState extends State<Workspace> {
   @override
   void dispose() {
     lifecycle.dispose();
+    monitor?.dispose();
     session?.close();
+    pathFocus.dispose();
+    filterFocus.dispose();
     pathController.dispose();
     filterController.dispose();
     editorController.dispose();
@@ -181,6 +198,11 @@ class _WorkspaceState extends State<Workspace> {
       fileError = null;
       listingGeneration++;
     });
+    monitor?.dispose();
+    monitor = null;
+    history.clear();
+    historyIndex = -1;
+    homePath = null;
     previous?.close();
     try {
       final remote = await RemoteSession.connect(
@@ -240,10 +262,11 @@ class _WorkspaceState extends State<Workspace> {
       }
       setState(() {
         session = remote;
-        transferView = true;
+        workspaceView = 'overview';
         connecting = null;
         addTerminal();
       });
+      monitor = ServerMonitor(remote.client, seconds: viewSettings.pollSeconds);
       remote.client.done.then(
         (_) => connectionLost(remote),
         onError: (Object error) => connectionLost(remote, error),
@@ -259,6 +282,8 @@ class _WorkspaceState extends State<Workspace> {
 
   void connectionLost(RemoteSession remote, [Object? error]) {
     if (!mounted || session != remote) return;
+    monitor?.dispose();
+    monitor = null;
     setState(() {
       session = null;
       terminalIds.clear();
@@ -274,6 +299,8 @@ class _WorkspaceState extends State<Workspace> {
   Future<void> disconnect() async {
     if (working || !await discardChanges() || !mounted) return;
     final remote = session;
+    monitor?.dispose();
+    monitor = null;
     setState(() {
       session = null;
       terminalIds.clear();
@@ -289,7 +316,7 @@ class _WorkspaceState extends State<Workspace> {
     remote?.close();
   }
 
-  Future<void> loadDirectory(String target) async {
+  Future<void> loadDirectory(String target, {bool addHistory = true}) async {
     final remote = session;
     if (remote == null) return;
     final generation = ++listingGeneration;
@@ -304,6 +331,16 @@ class _WorkspaceState extends State<Workspace> {
         return;
       }
       setState(() {
+        homePath ??= resolved;
+        if (addHistory &&
+            (historyIndex < 0 || history[historyIndex] != resolved)) {
+          if (historyIndex < history.length - 1) {
+            history.removeRange(historyIndex + 1, history.length);
+          }
+          history.add(resolved);
+          historyIndex = history.length - 1;
+        }
+        folderDropKeys.clear();
         path = resolved;
         pathController.text = resolved;
         entries = result;
@@ -358,7 +395,7 @@ class _WorkspaceState extends State<Workspace> {
       final text = await remote.readText(fullPath);
       if (!mounted || session != remote) return;
       setState(() {
-        transferView = false;
+        workspaceView = 'editor';
         editorPath = fullPath;
         originalText = text;
         editorController.text = text;
@@ -526,7 +563,6 @@ class _WorkspaceState extends State<Workspace> {
       );
       if (!mounted || session != remote) return;
       await loadDirectory(path);
-      await localFilesKey.currentState?.refresh();
       if (direction == TransferDirection.upload &&
           editorPath != null &&
           !dirty &&
@@ -604,6 +640,25 @@ class _WorkspaceState extends State<Workspace> {
     final colors = Theme.of(context).colorScheme;
     return CallbackShortcuts(
       bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyH, control: true): () =>
+            changeViewSettings(
+              () => viewSettings.showHidden = !viewSettings.showHidden,
+            ),
+        const SingleActivator(LogicalKeyboardKey.keyL, control: true): () {
+          setState(() => workspaceView = 'files');
+          pathFocus.requestFocus();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {
+          setState(() => workspaceView = 'files');
+          filterFocus.requestFocus();
+        },
+        const SingleActivator(LogicalKeyboardKey.f5): () {
+          if (session != null) loadDirectory(path);
+        },
+        const SingleActivator(LogicalKeyboardKey.arrowLeft, alt: true): () =>
+            navigateHistory(-1),
+        const SingleActivator(LogicalKeyboardKey.arrowRight, alt: true): () =>
+            navigateHistory(1),
         const SingleActivator(LogicalKeyboardKey.keyS, control: true):
             saveEditor,
       },
@@ -1049,12 +1104,107 @@ class _WorkspaceState extends State<Workspace> {
     );
   }
 
+  Future<Uri> exportForFileManager(String source) async {
+    final remote = session;
+    if (remote == null || working) {
+      throw StateError('Wait for the active transfer to finish.');
+    }
+    setState(() {
+      working = true;
+      transferLabel = 'Preparing export for Files…';
+    });
+    try {
+      final uri = await exports.prepare(
+        remote,
+        source,
+        (name, bytes, total) => progress(
+          'Preparing ${p.posix.basename(name)} for Files',
+          total,
+          bytes,
+        ),
+      );
+      message('Export ready for your file manager.');
+      return uri;
+    } catch (error) {
+      message('Export failed: $error');
+      rethrow;
+    } finally {
+      if (mounted) {
+        setState(() {
+          working = false;
+          transferLabel = null;
+          transferProgress = null;
+        });
+      }
+    }
+  }
+
+  void changeViewSettings(void Function() change) {
+    setState(change);
+    try {
+      viewSettings.save(widget.store);
+    } catch (e) {
+      message('Could not save preferences: $e');
+    }
+  }
+
+  Future<void> navigateHistory(int offset) async {
+    final next = historyIndex + offset;
+    if (next < 0 || next >= history.length || loading) return;
+    final target = history[next];
+    await loadDirectory(target, addHistory: false);
+    if (mounted && path == target) setState(() => historyIndex = next);
+  }
+
+  Future<void> fileProperties(SftpName entry) async {
+    final date = entry.attr.modifyTime == null
+        ? 'Unknown'
+        : DateTime.fromMillisecondsSinceEpoch(entry.attr.modifyTime! * 1000)
+              .toLocal()
+              .toString();
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(entry.filename),
+        content: SizedBox(
+          width: 480,
+          child: SelectableText(
+            'Path: ${p.posix.join(path, entry.filename)}\nType: ${entry.attr.isDirectory
+                ? 'Folder'
+                : entry.attr.isSymbolicLink
+                ? 'Symbolic link'
+                : 'File'}\nSize: ${humanBytes(entry.attr.size)}\nModified: $date\nPermissions: ${permissionsText(entry)}\nOwner UID: ${entry.attr.userID ?? 'Unknown'} · GID: ${entry.attr.groupID ?? 'Unknown'}',
+            style: const TextStyle(fontSize: 13, height: 1.8),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String? folderAt(Offset global) {
+    for (final entry in folderDropKeys.entries) {
+      final box = entry.value.currentContext?.findRenderObject();
+      if (box is RenderBox &&
+          box.attached &&
+          box.size.contains(box.globalToLocal(global))) {
+        return entry.key;
+      }
+    }
+    return null;
+  }
+
   Widget remoteWorkspace() => LayoutBuilder(
     builder: (context, constraints) {
-      final stacked = constraints.maxWidth < 650;
+      final narrow = constraints.maxWidth < 700;
       final browserWidth = fileWidth.clamp(
-        220.0,
-        (constraints.maxWidth * .55).clamp(220.0, 500.0),
+        240.0,
+        (constraints.maxWidth * .5).clamp(240.0, 500.0),
       );
       return Column(
         children: [
@@ -1062,61 +1212,62 @@ class _WorkspaceState extends State<Workspace> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
               children: [
-                SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment(
-                      value: true,
-                      icon: Icon(Icons.swap_horiz, size: 16),
-                      label: Text('Files & transfers'),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SegmentedButton<String>(
+                      segments: const [
+                        ButtonSegment(
+                          value: 'overview',
+                          icon: Icon(Icons.monitor_heart_outlined, size: 17),
+                          label: Text('Overview'),
+                        ),
+                        ButtonSegment(
+                          value: 'files',
+                          icon: Icon(Icons.folder_open, size: 17),
+                          label: Text('Files'),
+                        ),
+                        ButtonSegment(
+                          value: 'editor',
+                          icon: Icon(Icons.edit_outlined, size: 17),
+                          label: Text('Editor'),
+                        ),
+                      ],
+                      selected: {workspaceView},
+                      onSelectionChanged: (value) =>
+                          setState(() => workspaceView = value.first),
                     ),
-                    ButtonSegment(
-                      value: false,
-                      icon: Icon(Icons.edit_outlined, size: 16),
-                      label: Text('Editor'),
-                    ),
-                  ],
-                  selected: {transferView},
-                  onSelectionChanged: (value) =>
-                      setState(() => transferView = value.first),
-                ),
-                if (constraints.maxWidth > 900) ...[
-                  const SizedBox(width: 20),
-                  const Text(
-                    'Drag files or folders between panes to copy',
-                    style: TextStyle(fontSize: 11),
                   ),
-                ],
+                ),
+                IconButton(
+                  tooltip: viewSettings.showTerminal
+                      ? 'Hide terminal panel'
+                      : 'Show terminal panel',
+                  icon: const Icon(Icons.terminal),
+                  onPressed: () => changeViewSettings(
+                    () =>
+                        viewSettings.showTerminal = !viewSettings.showTerminal,
+                  ),
+                ),
               ],
             ),
           ),
           if (working) const LinearProgressIndicator(minHeight: 2),
           Expanded(
-            child: transferView && session != null
-                ? Row(
-                    children: [
-                      Expanded(
-                        child: LocalFilesPane(
-                          key: localFilesKey,
-                          initialDirectory: localDirectory,
-                          onDirectoryChanged: (value) => localDirectory = value,
-                          session: session,
-                          enabled: !working,
-                          onDownload: (data, directory) => transferFiles(
-                            TransferDirection.download,
-                            data.paths,
-                            directory,
-                          ),
-                        ),
-                      ),
-                      VerticalDivider(
-                        width: 1,
-                        color: Theme.of(context).dividerColor,
-                      ),
-                      Expanded(child: files()),
-                    ],
+            child: workspaceView == 'overview' && monitor != null
+                ? ServerDashboard(
+                    monitor: monitor!,
+                    onInterval: (seconds) {
+                      changeViewSettings(
+                        () => viewSettings.pollSeconds = seconds,
+                      );
+                      monitor!.configure(interval: seconds);
+                    },
                   )
-                : stacked
+                : workspaceView == 'files'
                 ? files()
+                : narrow
+                ? editor()
                 : Row(
                     children: [
                       SizedBox(width: browserWidth, child: files()),
@@ -1126,15 +1277,11 @@ class _WorkspaceState extends State<Workspace> {
                           behavior: HitTestBehavior.opaque,
                           onHorizontalDragUpdate: (details) => setState(
                             () => fileWidth = (fileWidth + details.delta.dx)
-                                .clamp(220, 500),
+                                .clamp(240, 500),
                           ),
-                          child: SizedBox(
+                          child: const SizedBox(
                             width: 6,
-                            child: VerticalDivider(
-                              width: 6,
-                              thickness: 1,
-                              color: Theme.of(context).dividerColor,
-                            ),
+                            child: VerticalDivider(width: 6),
                           ),
                         ),
                       ),
@@ -1142,34 +1289,37 @@ class _WorkspaceState extends State<Workspace> {
                     ],
                   ),
           ),
-          if (!transferView && stacked && editorPath != null)
-            SizedBox(height: constraints.maxHeight * .35, child: editor()),
-          if (session != null) ...[
-            MouseRegion(
-              cursor: SystemMouseCursors.resizeRow,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onVerticalDragUpdate: (details) => setState(
-                  () => terminalHeight = (terminalHeight - details.delta.dy)
-                      .clamp(100, constraints.maxHeight * .6),
-                ),
-                child: SizedBox(
-                  height: 6,
-                  child: Divider(
-                    height: 6,
-                    color: Theme.of(context).dividerColor,
+          if (session != null)
+            Offstage(
+              offstage: !viewSettings.showTerminal,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  MouseRegion(
+                    cursor: SystemMouseCursors.resizeRow,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onVerticalDragUpdate: (details) => setState(
+                        () =>
+                            terminalHeight = (terminalHeight - details.delta.dy)
+                                .clamp(100, constraints.maxHeight * .55),
+                      ),
+                      child: const SizedBox(
+                        height: 6,
+                        child: Divider(height: 6),
+                      ),
+                    ),
                   ),
-                ),
+                  SizedBox(
+                    height: terminalHeight.clamp(
+                      100.0,
+                      constraints.maxHeight * .45,
+                    ),
+                    child: terminals(),
+                  ),
+                ],
               ),
             ),
-            SizedBox(
-              height: terminalHeight.clamp(
-                100.0,
-                constraints.maxHeight * (stacked ? .3 : .55),
-              ),
-              child: terminals(),
-            ),
-          ],
         ],
       );
     },
@@ -1183,283 +1333,458 @@ class _WorkspaceState extends State<Workspace> {
         path.isNotEmpty &&
         (ModalRoute.of(context)?.isCurrent ?? true);
     return DropTarget(
+      key: const ValueKey('remote-drop-zone'),
       enable: enabled,
-      onDragEntered: (_) => setState(() => nativeHover = true),
-      onDragExited: (_) => setState(() => nativeHover = false),
+      onDragEntered: (details) => setState(() {
+        nativeHover = true;
+        nativeDropPath = folderAt(details.globalPosition);
+      }),
+      onDragUpdated: (details) =>
+          setState(() => nativeDropPath = folderAt(details.globalPosition)),
+      onDragExited: (_) => setState(() {
+        nativeHover = false;
+        nativeDropPath = null;
+      }),
       onDragDone: (details) {
         setState(() => nativeHover = false);
         transferFiles(
           TransferDirection.upload,
           details.files.map((file) => file.path).toList(),
-          path,
+          folderAt(details.globalPosition) ?? path,
         );
       },
-      child: TransferTarget(
-        key: const ValueKey('remote-drop-zone'),
-        accepts: (data) => enabled && data.local,
-        onDrop: (data) =>
-            transferFiles(TransferDirection.upload, data.paths, path),
-        label: 'Release to upload here',
-        child: Stack(
-          children: [
-            _remoteFilesContent(),
-            if (nativeHover && enabled)
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primary
-                          .withValues(alpha: .14),
-                      border: Border.all(
-                        color: Theme.of(context).colorScheme.primary,
-                        width: 2,
-                      ),
+      child: Stack(
+        children: [
+          _remoteFilesContent(),
+          if (nativeHover && enabled)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primary
+                        .withValues(alpha: .14),
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.primary,
+                      width: 2,
                     ),
-                    alignment: Alignment.center,
-                    child: const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text('Release to upload files and folders'),
+                  ),
+                  alignment: Alignment.center,
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        'Release to upload into ${nativeDropPath == null ? 'this folder' : p.posix.basename(nativeDropPath!)}',
                       ),
                     ),
                   ),
                 ),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }
 
   Widget _remoteFilesContent() {
-    final visible = entries
-        .where((e) => e.filename.toLowerCase().contains(filter.toLowerCase()))
-        .toList();
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'VPS FILES',
-                  style: TextStyle(
-                    fontSize: 10,
-                    letterSpacing: 1.8,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              IconButton(
-                tooltip: 'New folder',
-                onPressed: session == null || working ? null : createFolder,
-                icon: const Icon(Icons.create_new_folder_outlined, size: 18),
-              ),
-              PopupMenuButton<String>(
-                tooltip: 'Upload files or folder',
-                enabled: session != null && !working,
-                icon: const Icon(Icons.upload_file_rounded, size: 18),
-                onSelected: (value) =>
-                    value == 'folder' ? uploadFolder() : upload(),
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'files', child: Text('Upload files')),
-                  PopupMenuItem(value: 'folder', child: Text('Upload folder')),
-                ],
-              ),
-              IconButton(
-                tooltip: 'Refresh folder',
-                onPressed: session == null ? null : () => loadDirectory(path),
-                icon: const Icon(Icons.refresh_rounded, size: 18),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            children: [
-              IconButton(
-                tooltip: 'Parent folder',
-                onPressed: session == null || path == '/'
-                    ? null
-                    : () => loadDirectory(p.posix.dirname(path)),
-                icon: const Icon(Icons.arrow_upward, size: 17),
-              ),
-              Expanded(
-                child: TextField(
-                  key: const ValueKey('remote-path'),
-                  controller: pathController,
-                  enabled: session != null,
-                  style: const TextStyle(fontSize: 12),
-                  decoration: const InputDecoration(
-                    hintText: 'Remote path',
-                    contentPadding: EdgeInsets.all(10),
-                  ),
-                  onSubmitted: (value) => loadDirectory(value),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: TextField(
-            controller: filterController,
-            style: const TextStyle(fontSize: 12),
-            decoration: const InputDecoration(
-              hintText: 'Filter this folder',
-              prefixIcon: Icon(Icons.search, size: 17),
-              contentPadding: EdgeInsets.all(10),
+    final visible = viewSettings.visible(entries, filter);
+    return LayoutBuilder(
+      builder: (context, constraints) => Column(
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: (constraints.maxHeight * .65).clamp(0.0, 360.0),
             ),
-            onChanged: (value) => setState(() => filter = value),
-          ),
-        ),
-        if (fileError != null)
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(
-              fileError!,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.error,
-                fontSize: 12,
-              ),
-            ),
-          ),
-        if (loading) const LinearProgressIndicator(minHeight: 2),
-        Expanded(
-          child: visible.isEmpty
-              ? Center(
-                  child: Text(
-                    loading
-                        ? 'Loading files…'
-                        : filter.isEmpty
-                        ? 'This folder is empty'
-                        : 'No matching files',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                )
-              : ListView.builder(
-                  itemCount: visible.length,
-                  itemBuilder: (context, index) {
-                    final entry = visible[index];
-                    final fullPath = p.posix.join(path, entry.filename);
-                    Widget tile = ListTile(
-                      key: ValueKey('remote-entry-$fullPath'),
-                      dense: true,
-                      selected: selectedPath == fullPath,
-                      selectedTileColor: Theme.of(context).colorScheme.primary
-                          .withValues(alpha: .08),
-                      contentPadding: const EdgeInsets.only(left: 18, right: 4),
-                      leading: Icon(
-                        entry.attr.isDirectory
-                            ? Icons.folder_rounded
-                            : entry.attr.isSymbolicLink
-                            ? Icons.link
-                            : Icons.insert_drive_file_outlined,
-                        size: 20,
-                        color: entry.attr.isDirectory
-                            ? Theme.of(context).colorScheme.primary
-                            : Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                      title: Text(
-                        entry.filename,
-                        style: const TextStyle(fontSize: 12),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: entry.attr.isDirectory
-                          ? null
-                          : Text(
-                              formatBytes(entry.attr.size ?? 0),
-                              style: const TextStyle(fontSize: 10),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'VPS FILES',
+                            style: TextStyle(
+                              fontSize: 10,
+                              letterSpacing: 1.8,
+                              fontWeight: FontWeight.w600,
                             ),
-                      onTap: () {
-                        setState(() {
-                          selectedPath = fullPath;
-                          selectedDirectory = entry.attr.isDirectory;
-                        });
-                        openEntry(entry);
-                      },
-                      trailing: PopupMenuButton<String>(
-                        tooltip: 'File actions',
-                        iconSize: 16,
-                        enabled: !working,
-                        onSelected: (value) {
-                          if (value == 'code') {
-                            vscode(fullPath, entry.attr.isDirectory);
-                          }
-                          if (value == 'rename') renameEntry(entry);
-                          if (value == 'download') download(entry);
-                        },
-                        itemBuilder: (_) => [
-                          const PopupMenuItem(
-                            value: 'code',
-                            child: Text('Open in VS Code'),
                           ),
-                          const PopupMenuItem(
-                            value: 'rename',
-                            child: Text('Rename'),
+                        ),
+                        IconButton(
+                          tooltip: 'New folder',
+                          onPressed: session == null || working
+                              ? null
+                              : createFolder,
+                          icon: const Icon(
+                            Icons.create_new_folder_outlined,
+                            size: 18,
                           ),
-                          const PopupMenuItem(
-                            value: 'download',
-                            child: Text('Download'),
+                        ),
+                        PopupMenuButton<String>(
+                          tooltip: 'Upload files or folder',
+                          enabled: session != null && !working,
+                          icon: const Icon(Icons.upload_file_rounded, size: 18),
+                          onSelected: (value) =>
+                              value == 'folder' ? uploadFolder() : upload(),
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              value: 'files',
+                              child: Text('Upload files'),
+                            ),
+                            PopupMenuItem(
+                              value: 'folder',
+                              child: Text('Upload folder'),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          tooltip: 'Refresh folder',
+                          onPressed: session == null
+                              ? null
+                              : () => loadDirectory(path),
+                          icon: const Icon(Icons.refresh_rounded, size: 18),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          IconButton(
+                            tooltip: 'Back (Alt+Left)',
+                            onPressed: historyIndex > 0 && !loading
+                                ? () => navigateHistory(-1)
+                                : null,
+                            icon: const Icon(Icons.arrow_back, size: 18),
+                          ),
+                          IconButton(
+                            tooltip: 'Forward (Alt+Right)',
+                            onPressed:
+                                historyIndex < history.length - 1 && !loading
+                                ? () => navigateHistory(1)
+                                : null,
+                            icon: const Icon(Icons.arrow_forward, size: 18),
+                          ),
+                          IconButton(
+                            tooltip: 'Home folder',
+                            onPressed: homePath == null
+                                ? null
+                                : () => loadDirectory(homePath!),
+                            icon: const Icon(Icons.home_outlined, size: 18),
+                          ),
+                          IconButton(
+                            tooltip: 'Filesystem root',
+                            onPressed: session == null
+                                ? null
+                                : () => loadDirectory('/'),
+                            icon: const Icon(
+                              Icons.account_tree_outlined,
+                              size: 18,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: viewSettings.showHidden
+                                ? 'Hide dot files (Ctrl+H)'
+                                : 'Show dot files (Ctrl+H)',
+                            isSelected: viewSettings.showHidden,
+                            onPressed: () => changeViewSettings(
+                              () => viewSettings.showHidden =
+                                  !viewSettings.showHidden,
+                            ),
+                            icon: const Icon(
+                              Icons.visibility_outlined,
+                              size: 18,
+                            ),
+                          ),
+                          PopupMenuButton<String>(
+                            tooltip: 'Sort and view options',
+                            icon: const Icon(Icons.sort, size: 20),
+                            onSelected: (value) => changeViewSettings(() {
+                              if (value.startsWith('sort-')) {
+                                viewSettings.sort = FileSort.values.byName(
+                                  value.substring(5),
+                                );
+                              }
+                              if (value == 'descending') {
+                                viewSettings.descending =
+                                    !viewSettings.descending;
+                              }
+                              if (value == 'folders') {
+                                viewSettings.foldersFirst =
+                                    !viewSettings.foldersFirst;
+                              }
+                              if (value == 'compact') {
+                                viewSettings.compact = !viewSettings.compact;
+                              }
+                            }),
+                            itemBuilder: (_) => [
+                              for (final sort in FileSort.values)
+                                CheckedPopupMenuItem(
+                                  value: 'sort-${sort.name}',
+                                  checked: viewSettings.sort == sort,
+                                  child: Text('Sort by ${sort.name}'),
+                                ),
+                              const PopupMenuDivider(),
+                              CheckedPopupMenuItem(
+                                value: 'descending',
+                                checked: viewSettings.descending,
+                                child: const Text('Descending order'),
+                              ),
+                              CheckedPopupMenuItem(
+                                value: 'folders',
+                                checked: viewSettings.foldersFirst,
+                                child: const Text('Folders first'),
+                              ),
+                              CheckedPopupMenuItem(
+                                value: 'compact',
+                                checked: viewSettings.compact,
+                                child: const Text('Compact rows'),
+                              ),
+                            ],
+                          ),
+                          IconButton(
+                            tooltip: 'Copy current path',
+                            onPressed: path.isEmpty
+                                ? null
+                                : () {
+                                    Clipboard.setData(
+                                      ClipboardData(text: path),
+                                    );
+                                    message('Path copied.');
+                                  },
+                            icon: const Icon(Icons.copy, size: 17),
                           ),
                         ],
                       ),
-                    );
-                    tile = TransferDrag(
-                      data: FileDrag(
-                        paths: [fullPath],
-                        local: false,
-                        session: session,
-                      ),
-                      name: entry.filename,
-                      directory: entry.attr.isDirectory,
-                      enabled:
-                          session != null &&
-                          !working &&
-                          !entry.attr.isSymbolicLink,
-                      child: tile,
-                    );
-                    if (entry.attr.isDirectory) {
-                      tile = TransferTarget(
-                        accepts: (data) => !working && data.local,
-                        onDrop: (data) => transferFiles(
-                          TransferDirection.upload,
-                          data.paths,
-                          fullPath,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          tooltip: 'Parent folder',
+                          onPressed: session == null || path == '/'
+                              ? null
+                              : () => loadDirectory(p.posix.dirname(path)),
+                          icon: const Icon(Icons.arrow_upward, size: 17),
                         ),
-                        label: 'Upload into ${entry.filename}',
+                        Expanded(
+                          child: TextField(
+                            key: const ValueKey('remote-path'),
+                            focusNode: pathFocus,
+                            controller: pathController,
+                            enabled: session != null,
+                            style: const TextStyle(fontSize: 12),
+                            decoration: const InputDecoration(
+                              hintText: 'Remote path',
+                              contentPadding: EdgeInsets.all(10),
+                            ),
+                            onSubmitted: (value) => loadDirectory(value),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: TextField(
+                      controller: filterController,
+                      focusNode: filterFocus,
+                      style: const TextStyle(fontSize: 12),
+                      decoration: const InputDecoration(
+                        hintText: 'Filter this folder (Ctrl+F)',
+                        prefixIcon: Icon(Icons.search, size: 17),
+                        contentPadding: EdgeInsets.all(10),
+                      ),
+                      onChanged: (value) => setState(() => filter = value),
+                    ),
+                  ),
+                  if (fileError != null)
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(
+                        fileError!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  if (loading) const LinearProgressIndicator(minHeight: 2),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: visible.isEmpty
+                ? Center(
+                    child: Text(
+                      loading
+                          ? 'Loading files…'
+                          : entries.isEmpty
+                          ? 'This folder is empty'
+                          : filter.isNotEmpty
+                          ? 'No matching files'
+                          : 'No visible files — try showing dot files',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: visible.length,
+                    itemBuilder: (context, index) {
+                      final entry = visible[index];
+                      final fullPath = p.posix.join(path, entry.filename);
+                      Widget tile = ListTile(
+                        key: ValueKey('remote-entry-$fullPath'),
+                        dense: true,
+                        visualDensity: viewSettings.compact
+                            ? const VisualDensity(vertical: -4)
+                            : VisualDensity.standard,
+                        selected: selectedPath == fullPath,
+                        selectedTileColor: Theme.of(context).colorScheme.primary
+                            .withValues(alpha: .08),
+                        contentPadding: const EdgeInsets.only(
+                          left: 18,
+                          right: 4,
+                        ),
+                        leading: Icon(
+                          entry.attr.isDirectory
+                              ? Icons.folder_rounded
+                              : entry.attr.isSymbolicLink
+                              ? Icons.link
+                              : Icons.insert_drive_file_outlined,
+                          size: 20,
+                          color: entry.attr.isDirectory
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                        title: Text(
+                          entry.filename,
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: viewSettings.compact
+                            ? null
+                            : Text(
+                                '${entry.attr.isDirectory ? 'Folder' : humanBytes(entry.attr.size)} · ${modifiedText(entry)} · ${permissionsText(entry)}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 10),
+                              ),
+                        onTap: () {
+                          setState(() {
+                            selectedPath = fullPath;
+                            selectedDirectory = entry.attr.isDirectory;
+                          });
+                          openEntry(entry);
+                        },
+                        trailing: PopupMenuButton<String>(
+                          tooltip: 'File actions',
+                          iconSize: 16,
+                          enabled: !working,
+                          onSelected: (value) {
+                            if (value == 'code') {
+                              vscode(fullPath, entry.attr.isDirectory);
+                            }
+                            if (value == 'rename') renameEntry(entry);
+                            if (value == 'download') download(entry);
+                            if (value == 'properties') fileProperties(entry);
+                            if (value == 'copy') {
+                              Clipboard.setData(ClipboardData(text: fullPath));
+                              message('Path copied.');
+                            }
+                            if (value == 'export') {
+                              exportForFileManager(fullPath).then((uri) async {
+                                try {
+                                  await Process.run('xdg-open', [
+                                    File.fromUri(uri).parent.path,
+                                  ]);
+                                } catch (e) {
+                                  message('Could not open Files: $e');
+                                }
+                              }, onError: (Object _) {});
+                            }
+                          },
+                          itemBuilder: (_) => [
+                            const PopupMenuItem(
+                              value: 'code',
+                              child: Text('Open in VS Code'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'rename',
+                              child: Text('Rename'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'download',
+                              child: Text('Download to…'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'export',
+                              child: Text('Export and reveal in Files'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'copy',
+                              child: Text('Copy full path'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'properties',
+                              child: Text('Properties'),
+                            ),
+                          ],
+                        ),
+                      );
+                      tile = NativeExportDrag(
+                        enabled:
+                            widget.nativeDragEnabled &&
+                            !entry.attr.isSymbolicLink,
+                        canStart: () => session != null && !working,
+                        name: entry.filename,
+                        prepare: () => exportForFileManager(fullPath),
                         child: tile,
                       );
-                    }
-                    return tile;
-                  },
-                ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              Text(
-                '${visible.length} items',
-                style: const TextStyle(fontSize: 10),
-              ),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: session == null || path.isEmpty || working
-                    ? null
-                    : () => vscode(
-                        selectedPath ?? path,
-                        selectedPath == null || selectedDirectory,
-                      ),
-                icon: const Icon(Icons.open_in_new, size: 13),
-                label: const Text('VS Code', style: TextStyle(fontSize: 11)),
-              ),
-            ],
+                      if (entry.attr.isDirectory) {
+                        tile = KeyedSubtree(
+                          key: folderDropKeys.putIfAbsent(
+                            fullPath,
+                            () => GlobalKey(),
+                          ),
+                          child: tile,
+                        );
+                      }
+                      return tile;
+                    },
+                  ),
           ),
-        ),
-      ],
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Text(
+                  '${visible.length} of ${entries.length} items',
+                  style: const TextStyle(fontSize: 10),
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: session == null || path.isEmpty || working
+                      ? null
+                      : () => vscode(
+                          selectedPath ?? path,
+                          selectedPath == null || selectedDirectory,
+                        ),
+                  icon: const Icon(Icons.open_in_new, size: 13),
+                  label: const Text('VS Code', style: TextStyle(fontSize: 11)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1678,4 +2003,14 @@ String formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';
   if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
   return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
+String permissionsText(SftpName entry) => entry.attr.mode == null
+    ? 'Unknown permissions'
+    : (entry.attr.mode!.value & 0x1ff).toRadixString(8).padLeft(3, '0');
+String modifiedText(SftpName entry) {
+  final seconds = entry.attr.modifyTime;
+  if (seconds == null) return 'Unknown date';
+  final time = DateTime.fromMillisecondsSinceEpoch(seconds * 1000).toLocal();
+  return '${time.year}-${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')} ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
 }

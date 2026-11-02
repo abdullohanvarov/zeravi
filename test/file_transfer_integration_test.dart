@@ -6,6 +6,8 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:zeravi/data/app_store.dart';
 import 'package:zeravi/data/connection.dart';
 import 'package:zeravi/services/file_transfer.dart';
+import 'package:zeravi/services/export_cache.dart';
+import 'package:zeravi/services/server_monitor.dart';
 import 'package:zeravi/services/remote_session.dart';
 
 void main() {
@@ -170,6 +172,29 @@ void main() {
         onProgress: (_, _, _) {},
       );
       expect(await session.readText('$remoteRoot/$longName'), 'Long name');
+
+      // Native drag exports publish a URI only after the entire folder is readable locally.
+      final exportRoot = await Directory('${local.path}/exports').create();
+      final exported = await ExportCache(directory: exportRoot)
+          .prepare(session, '$remoteRoot/project 🌿', (_, _, _) {});
+      expect(exported.scheme, 'file');
+      expect(
+        await File('${exported.toFilePath()}/nested/binary.bin').readAsBytes(),
+        [0, 255, 1, 127],
+      );
+      expect(
+        await Directory('${exported.toFilePath()}/nested/empty').exists(),
+        isTrue,
+      );
+      expect(
+        await File('${exported.toFilePath()}/read me.txt').readAsString(),
+        'Replacement\n',
+      );
+      final metrics = await readServerSnapshot(session.client);
+      expect(metrics.hostname, 'zeravi-fixture');
+      expect(metrics.memoryTotal, 4194304 * 1024);
+      expect(metrics.disks.first.mount, '/');
+      expect(metrics.processes.first.command, 'python3');
 
       // A file appearing after preflight is not silently overwritten.
       final single = await File('${local.path}/new.txt')

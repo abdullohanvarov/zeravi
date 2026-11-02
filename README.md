@@ -1,124 +1,151 @@
 # Zeravi
 
-A local desktop workspace for remote Linux servers, built with Flutter.
-The interface runs on your computer; SSH and SFTP connect it to your server.
+A local Flutter desktop workspace for remote Linux servers. Connect through SSH,
+browse remote files, use your system file manager for transfers, open terminals,
+and keep an eye on the server from one app.
+
+**Preview · Ubuntu Linux x64 is the tested target.** Other platform folders are
+Flutter scaffolding; a web build is not supported.
+
+![Zeravi server overview](docs/images/overview.png)
+
+*Screenshots use a disposable test server with synthetic monitoring data.*
+
+## What is included
+
+- Saved SSH profiles, key/password authentication and explicit host-key trust.
+- **Overview:** live CPU history, RAM, swap, load, uptime and interface traffic.
+- Filesystem capacity and top-process views, with refresh/pause/polling controls.
+- A VPS file browser that works with Nautilus instead of duplicating local Files.
+- Native incoming file/folder drops, including drops onto remote folder rows.
+- Native outgoing file/folder copies using completed local export staging.
+- Recursive transfers, empty folders, overwrite/merge confirmation and progress.
+- Sort by name, size, modification time or type; descending order and folders first.
+- Hidden-file and compact-row toggles, file properties and copy-path actions.
+- Back/forward, parent, home and root navigation, plus keyboard shortcuts.
+- Multiple independent SSH terminals and a UTF-8 text editor with conflict checks.
+- Open remote paths in local VS Code through an existing Remote SSH alias.
+- Persisted theme, browser settings, monitoring interval and terminal visibility.
 
 ## Run on Ubuntu
 
+Tested with **Flutter 3.47.7 / Dart 3.13.5**. Install Flutter's Linux desktop
+prerequisites (Clang, CMake, Ninja, pkg-config and GTK development libraries), then:
+
 ```sh
+flutter doctor -v
 flutter pub get
 flutter run -d linux
 ```
 
-The first launch opens an empty workspace. Choose **Add connection**, enter a
-hostname/IP and username, and select an SSH private key or password authentication.
-Verify the server fingerprint when connecting for the first time.
+Native drag-and-drop uses `super_drag_and_drop`, whose build integration uses
+Rust or downloads its prebuilt native component when Rust is absent.
 
-Build a standalone desktop bundle:
+Choose **Add connection**, enter the server hostname/IP, port and username, and
+select an existing private key or password authentication. Check the first-use
+host fingerprint against your server console or administrator before trusting it.
+Passwords and key passphrases are requested when connecting and are not saved.
 
-```sh
-flutter build linux --release
-./build/linux/x64/release/bundle/zeravi
-```
+## Daily workflow
 
-Keep the executable together with the bundle's `lib` and `data` directories.
-Flutter's Linux development prerequisites include Clang, CMake, Ninja, pkg-config,
-and GTK development libraries. The tested target is Ubuntu Linux x64.
+**Overview** opens when connected. CPU percentages and network rates need two
+samples. Missing server commands or restricted metrics remain unavailable; failed
+refreshes leave the last successful reading visible with an error. Process CPU
+is the lifetime average reported by `ps`. Polling is read-only and needs no root.
 
-## Available in this preview
+**Files** shows remote contents. Drag local files/folders from Nautilus onto the
+browser or onto a remote folder row. To download, drag a remote item into Nautilus.
+The native data provider downloads a complete export copy before supplying its
+local file URI. Large exports take time: progress appears in Zeravi while the
+file manager waits. **Export and reveal in Files** also prepares a local copy and
+opens its containing folder, useful when a file manager times out during a large
+drag. Sources stay intact; these operations are copies, never moves.
 
-- Material 3 dark/light workspace with resizable file and terminal panels.
-- SQLite saved connection profiles; edit and remove profiles while disconnected.
-- Password and private-key authentication, including a key passphrase prompt.
-- Explicit first-use host fingerprint trust; changed host keys are rejected.
-- Side-by-side local and VPS file browsers with drag-and-drop copies in both
-  directions, including nested and empty folders.
-- Drop files/folders from Ubuntu Files onto the VPS pane to upload. Drop onto
-  folder rows inside Zeravi to choose a destination folder.
-- SFTP path navigation, filtering, folder creation, renaming, multi-file uploads
-  and recursive downloads, with progress and overwrite/merge confirmation.
-- Multiple interactive SSH terminal tabs. Right-click copies the selection or
-  pastes clipboard text when there is no selection.
-- One UTF-8 text editor (up to 1 MiB), Ctrl+S, unsaved-change prompts, and a
-  remote-content check before saving. Binary files are rejected.
-- Open remote files/folders in local VS Code through an existing SSH host alias.
-- Visible errors and connection state. Disconnecting unexpectedly keeps the
-  editor's unsaved content available to copy.
+**Editor** opens when a regular UTF-8 text file is selected. The preview supports
+one file up to 1 MiB; use **Save** or **Ctrl+S**. Existing server changes are checked
+before saving. Use **+** in the terminal bar for another SSH shell. Hiding the
+terminal panel preserves its shells. Right-click copies a selection or pastes.
 
-## Open in VS Code
+### Shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+S | Save the open editor file |
+| Ctrl+H | Toggle hidden files |
+| Ctrl+L | Focus the remote path |
+| Ctrl+F | Focus the file-name filter |
+| F5 | Refresh the current remote folder |
+| Alt+Left / Alt+Right | Back / forward |
+
+### Open in VS Code
 
 Install VS Code, make its `code` command available, and install **Remote - SSH**.
-Create a host alias in your local `~/.ssh/config`, for example:
+Create a matching alias in your existing local `~/.ssh/config`:
 
 ```sshconfig
 Host my-server
     HostName your-server.example
     User ubuntu
-    Port 22
     IdentityFile ~/.ssh/id_ed25519
 ```
 
-Set **VS Code SSH alias** to `my-server` in Zeravi's connection form. That alias
-must point to the same server as the saved profile. Zeravi checks the extension
-and launches `code` with separate arguments and an encoded remote URI. It does
-not edit SSH configuration or install extensions automatically.
+Set **VS Code SSH alias** to `my-server` in the connection form. Zeravi launches
+the existing alias; it does not edit SSH configuration or install extensions.
 
-## Storage and current limits
+![Zeravi remote file browser](docs/images/files.png)
 
-Profiles and trusted host fingerprints are stored in `zeravi.sqlite` in the
-platform application-support directory. Passwords and key passphrases are held
-only in memory. Private keys are read from the selected file and never copied
-into the database. System-keyring credential saving is planned.
-
-This first version supports one connected server at a time and one open text
-file, alongside multiple shells. The editor is plain text; syntax highlighting
-and editor tabs are planned. Monitoring, services, logs, tunnels, deployment,
-recursive deletion, transfer queues and workspace restore are also planned. No remote desktop/display server is needed for the implemented features.
-
-Transfers copy items and keep the source. Symbolic links and special files are
-skipped to avoid following loops or copying outside the selected tree. Each file
-is staged beside its destination before replacement; folder transfers complete
-one file at a time. Replacing existing VPS files requires the server to support
-POSIX rename; otherwise the transfer fails while preserving the existing file.
-Failed transfers can leave completed files in a partially copied folder. Transfer
-retry/resume is future work. Dragging VPS files directly into an external file
-manager is not implemented; use the Local files pane for downloads.
-
-Editor saves check for remote changes before writing, but that check and the write
-are not atomic. Interrupted editor saves can leave partial remote content.
-Changed host keys currently require manual investigation; there is
-no in-app reset-trust action yet. SSH agent, ProxyJump and SSH config import are
-not implemented. Theme/layout settings are not yet persisted.
-
-## Checks
+## Build and test
 
 ```sh
 flutter analyze
 flutter test
+flutter build linux --release
+./build/linux/x64/release/bundle/zeravi
 ```
 
-The default suite covers profile storage, host-trust isolation, input validation,
-VS Code URI construction, and connection-form/window-layout behavior.
-The real SSH integration test is skipped unless a fixture is supplied.
-
-To test locally without touching a real server, install `asyncssh` in a Python
-virtual environment and run:
+Keep the executable together with the bundle's `lib` and `data` folders.
+For real SSH checks, install `asyncssh` in a Python virtual environment and run:
 
 ```sh
 python tool/test_ssh_server.py
 ```
 
-This prints a temporary JSON fixture path. With that server running, use:
+It prints a temporary JSON path. Keep that loopback-only server running, and in
+another terminal use the printed path:
 
 ```sh
-flutter test --dart-define=SSH_FIXTURE=/printed/path/fixture.json
-flutter test tool/workspace_preview_test.dart --dart-define=SSH_FIXTURE=/printed/path/fixture.json
+flutter test --concurrency=1 \
+  --dart-define=SSH_FIXTURE=/printed/path/fixture.json \
+  test tool/workspace_preview_test.dart
 ```
 
-The fixture binds only to loopback, uses temporary test keys and files, and runs
-an echo-only test shell. Stop it with Ctrl+C. The UI smoke test exercises drag-and-drop in both directions, folder targets,
-native drop events, and overwrite confirmation. It writes screenshots
-to `build/previews/` and optionally loads Ubuntu's Liberation fonts for previews.
-It does not create real saved profiles or connect to your VPS.
+The fixture uses generated keys, disposable files, synthetic monitoring data and
+an echo-only shell. It never executes arbitrary test input as a system command.
+Stop it with Ctrl+C. Default tests skip SSH checks when no fixture is supplied.
+UI previews are generated in `build/previews/`. Widget tests disable the native
+drag engine; they exercise incoming drop messages and the exact outgoing export
+provider. A physical Nautilus drag is a separate desktop smoke check.
 
-See [the project plan](docs/PROJECT_PLAN.md) for milestones and architecture.
+## Storage and current limits
+
+Profiles, trusted fingerprints and preferences are stored in `zeravi.sqlite` in
+the platform application-support directory. Passwords, passphrases and key
+contents are not persisted. Keyring integration is planned.
+
+Exports are retained in the application's `zeravi-exports` temporary directory
+for up to 24 hours; stale copies are cleaned on a later export. This gives the
+system file manager time to finish copying. Failed preparations do not publish a
+URI. Symbolic links/special files are skipped and POSIX permissions are not
+replicated. Each copied file is staged before replacement. Folder batches are
+not transactions, and completed files remain after a later failure. Replacing
+existing VPS files requires POSIX rename support.
+
+The preview supports one connected server and one plain-text editor alongside
+multiple shells. Editor checks and writes are not atomic; an interrupted editor
+save can leave partial content. Changed host keys require manual investigation;
+there is no reset-trust button. SSH agent/ProxyJump, transfer resume/cancellation,
+services/log controls, tunnels, deployment and editor tabs remain planned.
+
+- [Expected desktop workflow and implemented checklist](docs/USER_EXPECTATIONS.md)
+- [Architecture and data handling](docs/ARCHITECTURE.md)
+- [Project plan](docs/PROJECT_PLAN.md)
