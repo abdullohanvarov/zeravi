@@ -14,6 +14,10 @@ class FileViewSettings {
       foldersFirst = true,
       compact = false,
       showTerminal = true;
+  bool gridView = false,
+      connectionsCollapsed = false,
+      terminalMaximized = false;
+  double terminalWidth = 420, explorerWidth = 300, connectionsWidth = 224;
   int pollSeconds = 5;
 
   FileViewSettings();
@@ -29,6 +33,26 @@ class FileViewSettings {
       settings.foldersFirst = map['foldersFirst'] != false;
       settings.compact = map['compact'] == true;
       settings.showTerminal = map['showTerminal'] != false;
+      settings.gridView = map['gridView'] == true;
+      settings.connectionsCollapsed = map['connectionsCollapsed'] == true;
+      for (final field in [
+        'terminalWidth',
+        'explorerWidth',
+        'connectionsWidth',
+      ]) {
+        final value = map[field];
+        if (value is num && value.isFinite) {
+          if (field == 'terminalWidth') {
+            settings.terminalWidth = value.toDouble().clamp(240, 1400);
+          }
+          if (field == 'explorerWidth') {
+            settings.explorerWidth = value.toDouble().clamp(220, 700);
+          }
+          if (field == 'connectionsWidth') {
+            settings.connectionsWidth = value.toDouble().clamp(190, 350);
+          }
+        }
+      }
       final poll = map['pollSeconds'];
       if ([2, 5, 10, 30].contains(poll)) settings.pollSeconds = poll as int;
     } catch (_) {
@@ -46,6 +70,11 @@ class FileViewSettings {
       'compact': compact,
       'showTerminal': showTerminal,
       'pollSeconds': pollSeconds,
+      'gridView': gridView,
+      'connectionsCollapsed': connectionsCollapsed,
+      'terminalWidth': terminalWidth,
+      'explorerWidth': explorerWidth,
+      'connectionsWidth': connectionsWidth,
     }),
   );
   List<SftpName> visible(List<SftpName> entries, String filter) {

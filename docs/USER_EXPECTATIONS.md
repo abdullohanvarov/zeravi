@@ -22,3 +22,15 @@
 Service controls and live logs, SSH tunnels, deployment, multi-selection, transfer
 resume/cancellation, richer permission editing, and syntax highlighting remain
 separate roadmap items. Native dragging is a copy operation, never a remote move.
+
+
+## Layout and editor integration additions
+
+- [x] Open in VS Code from saved SSH details without a mandatory manual alias.
+- [x] Show useful setup errors instead of raw state exceptions.
+- [x] Switch between saved grid and list views with identical file actions.
+- [x] Right-click folders to open a focused terminal tab in that exact folder.
+- [x] Dock terminals on the right and preserve them when hidden/maximized.
+- [x] Resize connections, the editor explorer and terminal with saved widths.
+- [x] Collapse connections into an icon rail.
+- [x] Reset layout, double-click splitters to reset, and label tabs by folder.

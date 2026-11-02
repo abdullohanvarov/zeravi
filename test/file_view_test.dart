@@ -55,7 +55,11 @@ void main() {
         ..showHidden = true
         ..compact = true
         ..showTerminal = false
-        ..pollSeconds = 10;
+        ..pollSeconds = 10
+        ..gridView = true
+        ..connectionsCollapsed = true
+        ..terminalWidth = 500
+        ..explorerWidth = 280;
       settings.save(store);
       final loaded = FileViewSettings.load(store);
       expect(loaded.sort, FileSort.modified);
@@ -63,6 +67,10 @@ void main() {
       expect(loaded.compact, isTrue);
       expect(loaded.showTerminal, isFalse);
       expect(loaded.pollSeconds, 10);
+      expect(loaded.gridView, isTrue);
+      expect(loaded.connectionsCollapsed, isTrue);
+      expect(loaded.terminalWidth, 500);
+      expect(loaded.explorerWidth, 280);
       store.setSetting('file_view', 'invalid json');
       expect(FileViewSettings.load(store).sort, FileSort.name);
       store.setSetting('theme', 'light');

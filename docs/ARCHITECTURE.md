@@ -9,7 +9,8 @@ No Zeravi backend or server agent is required.
 | `lib/main.dart` | Riverpod bootstrap, startup errors, persisted theme |
 | `lib/data/app_store.dart` | SQLite profiles, trusted host keys and preferences |
 | `lib/data/file_view.dart` | File filtering, sort order and browsing preferences |
-| `lib/services/remote_session.dart` | SSH/SFTP lifecycle, editor operations, VS Code launch |
+| `lib/services/remote_session.dart` | SSH/SFTP lifecycle, editor operations |
+| `lib/services/vscode_launcher.dart` | Managed SSH metadata and local VS Code launch |
 | `lib/services/file_transfer.dart` | Recursive preflight, collision checks and staged copies |
 | `lib/services/export_cache.dart` | Completed local copies for native file-manager exports |
 | `lib/services/server_monitor.dart` | Bounded Linux probes, snapshot parsing, deltas and polling |
@@ -53,6 +54,18 @@ handshakes require a physical desktop smoke check.
 SQLite holds connection metadata, key-file references, trusted fingerprints and
 preferences. A settings table is added without changing existing profile data.
 Passwords/passphrases and private-key contents are not stored. Unknown hosts
-require explicit trust, changed keys are rejected, and the system's SSH config
-and known-hosts files are not rewritten. VS Code receives a separately passed
-encoded URI using an existing user-provided SSH alias.
+require explicit trust, changed keys are rejected, and the system's known-hosts file is not rewritten. VS Code receives separate
+arguments and an encoded URI. An explicit user-provided SSH alias is preserved.
+When the alias is blank, the launcher writes metadata-only managed Host entries
+and a backed-up Include in the local SSH config so VS Code can reuse the saved
+connection. Existing config symlinks and manual Host entries are preserved.
+
+
+## Workspace layout
+
+The terminal dock stays at the right side of the workspace and keeps its SSH
+channels alive while hidden or maximized. Splitters resize connections, the editor
+explorer, and the terminal; preferences clamp persisted widths for smaller windows.
+Grid and list entries share the same context-menu and native drag implementations.
+Opening a folder terminal sends a safely shell-quoted `cd` command to a fresh
+interactive SSH shell; no remote file name is interpreted as shell syntax.

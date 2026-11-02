@@ -9,7 +9,14 @@ import 'package:xterm/xterm.dart';
 import '../services/remote_session.dart';
 
 class SshTerminal extends StatefulWidget {
-  const SshTerminal({super.key, required this.session});
+  const SshTerminal({
+    super.key,
+    required this.session,
+    this.initialDirectory,
+    this.active = true,
+  });
+  final String? initialDirectory;
+  final bool active;
   final RemoteSession session;
   @override
   State<SshTerminal> createState() => _SshTerminalState();
@@ -18,6 +25,7 @@ class SshTerminal extends StatefulWidget {
 class _SshTerminalState extends State<SshTerminal> {
   final terminal = Terminal(maxLines: 10000);
   final controller = TerminalController();
+  final focus = FocusNode();
   SSHSession? shell;
   final subscriptions = <StreamSubscription<String>>[];
 
@@ -25,6 +33,16 @@ class _SshTerminalState extends State<SshTerminal> {
   void initState() {
     super.initState();
     start();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && widget.active) focus.requestFocus();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant SshTerminal oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active) focus.requestFocus();
+    if (!widget.active && oldWidget.active) focus.unfocus();
   }
 
   Future<void> start() async {
@@ -53,6 +71,13 @@ class _SshTerminalState extends State<SshTerminal> {
       terminal.onResize = (w, h, pw, ph) =>
           session.resizeTerminal(w, h, pw, ph);
       session.resizeTerminal(terminal.viewWidth, terminal.viewHeight);
+      if (widget.initialDirectory != null) {
+        session.stdin.add(
+          Uint8List.fromList(
+            utf8.encode(terminalDirectoryCommand(widget.initialDirectory!)),
+          ),
+        );
+      }
       await session.done;
       if (mounted) {
         terminal.onOutput = null;
@@ -75,6 +100,7 @@ class _SshTerminalState extends State<SshTerminal> {
     }
     shell?.close();
     controller.dispose();
+    focus.dispose();
     super.dispose();
   }
 
@@ -86,7 +112,8 @@ class _SshTerminalState extends State<SshTerminal> {
       child: TerminalView(
         terminal,
         controller: controller,
-        autofocus: false,
+        autofocus: widget.active,
+        focusNode: focus,
         textStyle: const TerminalStyle(fontSize: 13, fontFamily: 'monospace'),
         onSecondaryTapDown: (_, _) async {
           final selection = controller.selection;
@@ -103,4 +130,12 @@ class _SshTerminalState extends State<SshTerminal> {
       ),
     ),
   );
+}
+
+String terminalDirectoryCommand(String path) {
+  if (!path.startsWith('/') || path.contains('\u0000')) {
+    throw ArgumentError('An absolute folder path is required');
+  }
+  final quoted = "'${path.replaceAll("'", "'\"'\"'")}'";
+  return 'cd -- $quoted\r';
 }

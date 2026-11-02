@@ -159,8 +159,7 @@ class _ConnectionDialogState extends State<ConnectionDialog> {
                 decoration: const InputDecoration(
                   labelText: 'VS Code SSH alias (optional)',
                   hintText: 'my-server',
-                  helperText:
-                      'An existing Host entry in your local ~/.ssh/config',
+                  helperText: 'Optional. Leave blank to use this saved connection automatically.',
                 ),
                 validator: (v) =>
                     v != null &&

@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:zeravi/data/app_store.dart';
 import 'package:zeravi/data/connection.dart';
-import 'package:zeravi/services/remote_session.dart';
+import 'package:zeravi/services/vscode_launcher.dart';
 
 void main() {
   test('profile roundtrip, update and removal preserve metadata only', () {
@@ -59,15 +59,15 @@ void main() {
     expect(Uri.parse(args.last).host, 'ssh-remote+dev-box');
     expect(
       () => vscodeArguments('--help', '/tmp', directory: true),
-      throwsStateError,
+      throwsA(isA<VSCodeLaunchException>()),
     );
     expect(
       () => vscodeArguments('dev;echo bad', '/tmp', directory: true),
-      throwsStateError,
+      throwsA(isA<VSCodeLaunchException>()),
     );
     expect(
       () => vscodeArguments('dev', 'relative', directory: true),
-      throwsArgumentError,
+      throwsA(isA<VSCodeLaunchException>()),
     );
   });
 

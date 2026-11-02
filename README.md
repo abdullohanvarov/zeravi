@@ -23,8 +23,11 @@ Flutter scaffolding; a web build is not supported.
 - Sort by name, size, modification time or type; descending order and folders first.
 - Hidden-file and compact-row toggles, file properties and copy-path actions.
 - Back/forward, parent, home and root navigation, plus keyboard shortcuts.
+- Saved grid/list views and real right-click file/folder menus.
+- A resizable right-side terminal dock, resizable editor explorer and connections.
+- Collapsible connections, terminal maximize/restore, and layout reset.
 - Multiple independent SSH terminals and a UTF-8 text editor with conflict checks.
-- Open remote paths in local VS Code through an existing Remote SSH alias.
+- Open remote paths in local VS Code using saved SSH details or an existing alias.
 - Persisted theme, browser settings, monitoring interval and terminal visibility.
 
 ## Run on Ubuntu
@@ -61,6 +64,18 @@ file manager waits. **Export and reveal in Files** also prepares a local copy an
 opens its containing folder, useful when a file manager times out during a large
 drag. Sources stay intact; these operations are copies, never moves.
 
+**Layout:** use the grid/list button in Files to choose a view. Drag the dividers
+between connections, the editor explorer and the right-side terminal to resize
+them. Double-click a divider to reset its width, or use **Reset layout** to restore
+the default workspace. Collapse connections to an icon rail with the chevron or
+Ctrl+B. Pane widths, view mode and collapsed state are remembered.
+
+Right-click a remote folder and choose **Open in terminal** to create a focused
+SSH tab in that folder. Files offer **Open parent in terminal**. The terminal
+**+** button and Ctrl+Alt+T start a tab in the current explorer folder. Tabs show
+folder names with full paths in tooltips. Terminal maximize/hide preserves the
+existing shells.
+
 **Editor** opens when a regular UTF-8 text file is selected. The preview supports
 one file up to 1 MiB; use **Save** or **Ctrl+S**. Existing server changes are checked
 before saving. Use **+** in the terminal bar for another SSH shell. Hiding the
@@ -71,6 +86,8 @@ terminal panel preserves its shells. Right-click copies a selection or pastes.
 | Shortcut | Action |
 | --- | --- |
 | Ctrl+S | Save the open editor file |
+| Ctrl+B | Collapse / expand connections |
+| Ctrl+Alt+T | New terminal in the current remote folder |
 | Ctrl+H | Toggle hidden files |
 | Ctrl+L | Focus the remote path |
 | Ctrl+F | Focus the file-name filter |
@@ -80,17 +97,17 @@ terminal panel preserves its shells. Right-click copies a selection or pastes.
 ### Open in VS Code
 
 Install VS Code, make its `code` command available, and install **Remote - SSH**.
-Create a matching alias in your existing local `~/.ssh/config`:
+**Open in VS Code** uses the saved host, username, port and private-key path when
+the optional alias is blank. Zeravi creates a metadata-only entry in
+`~/.ssh/zeravi.conf`, adds an Include at the top of `~/.ssh/config`, and keeps an
+initial `config.zeravi-backup` when an existing config needs that Include. Existing
+manual Host entries remain intact. Passwords, passphrases and key contents are
+never written. VS Code handles its own authentication prompts.
 
-```sshconfig
-Host my-server
-    HostName your-server.example
-    User ubuntu
-    IdentityFile ~/.ssh/id_ed25519
-```
-
-Set **VS Code SSH alias** to `my-server` in the connection form. Zeravi launches
-the existing alias; it does not edit SSH configuration or install extensions.
+To use an existing custom SSH alias (for example one with jump-host settings),
+enter it in **VS Code SSH alias**. That path uses your existing configuration
+without generating an entry. Errors identify missing VS Code/Remote SSH or local
+SSH configuration access instead of showing a raw “Bad state” message.
 
 ![Zeravi remote file browser](docs/images/files.png)
 

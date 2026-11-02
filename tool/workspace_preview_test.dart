@@ -5,6 +5,8 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:zeravi/ui/ssh_terminal.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -156,6 +158,61 @@ void main() {
           await tester.testTextInput.receiveAction(TextInputAction.done);
           await until(find.text('hello.txt'));
           expect(find.text('.env'), findsNothing);
+          await tester.tap(find.byTooltip('Switch to grid view'));
+          await tick();
+          expect(find.byKey(const ValueKey('remote-grid')), findsOneWidget);
+          expect(store.setting('file_view'), contains('"gridView":true'));
+          final folderEntry = find.byKey(
+            ValueKey('remote-entry-$remotePath/folder'),
+          );
+          await tester.tap(folderEntry, buttons: kSecondaryMouseButton);
+          await tick();
+          await tick();
+          await tick();
+          await tester.tap(find.text('Open in terminal'));
+          await until(find.byKey(const ValueKey('terminal-tab-2')));
+          expect(
+            tester
+                .widgetList<SshTerminal>(
+                  find.byType(SshTerminal, skipOffstage: false),
+                )
+                .any((w) => w.initialDirectory == '$remotePath/folder'),
+            isTrue,
+          );
+          final rightPane = find.byKey(const ValueKey('right-terminal-pane'));
+          expect(
+            tester.getTopLeft(rightPane).dx,
+            greaterThan(
+              tester
+                  .getTopRight(find.byKey(const ValueKey('remote-drop-zone')))
+                  .dx,
+            ),
+          );
+          final beforeWidth = tester.getSize(rightPane).width;
+          await tester.drag(
+            find.byKey(const ValueKey('terminal-resize-handle')),
+            const Offset(60, 0),
+          );
+          await tick();
+          expect(tester.getSize(rightPane).width, lessThan(beforeWidth));
+          await tester.tap(find.byTooltip('Maximize terminal'));
+          await tick();
+          expect(tester.takeException(), isNull);
+          expect(tester.getSize(rightPane).width, greaterThan(beforeWidth));
+          await tester.tap(find.byTooltip('Restore terminal size'));
+          await tick();
+          await tester.tap(find.byTooltip('Collapse connections (Ctrl+B)'));
+          await tick();
+          expect(find.byTooltip('Expand connections (Ctrl+B)'), findsOneWidget);
+          expect(
+            store.setting('file_view'),
+            contains('"connectionsCollapsed":true'),
+          );
+          await tester.tap(find.byTooltip('Expand connections (Ctrl+B)'));
+          await tick();
+          await tester.tap(find.byTooltip('Close shell 2'));
+          await tick();
+
           await tester.tap(find.byTooltip('Show dot files (Ctrl+H)'));
           await until(find.text('.env'));
           await tester.tap(find.byTooltip('Sort and view options'));
@@ -253,13 +310,18 @@ void main() {
           );
           await File.fromUri(uri).parent.delete(recursive: true);
           await shot('zeravi-files');
+          await tester.tap(find.byTooltip('Switch to list view'));
+          await tick();
+          expect(find.byKey(const ValueKey('remote-list')), findsOneWidget);
           await tester.tap(find.text('hello.txt'));
           await until(find.text('UTF-8  •  Plain text'));
-          await tester.tap(find.byTooltip('Show terminal panel'));
-          await tick();
+          if (find.byTooltip('Show terminal panel').evaluate().isNotEmpty) {
+            await tester.tap(find.byTooltip('Show terminal panel'));
+            await tick();
+          }
           await tester.tap(find.byTooltip('New terminal'));
-          await until(find.text('Shell 2'));
-          await tester.tap(find.byTooltip('Close shell 2'));
+          await until(find.byKey(const ValueKey('terminal-tab-3')));
+          await tester.tap(find.byTooltip('Close shell 3'));
           await tick();
           await shot('zeravi-workspace');
           tester.view.physicalSize = const Size(1000, 700);

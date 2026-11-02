@@ -12,6 +12,8 @@ import 'package:path/path.dart' as p;
 import '../data/app_store.dart';
 import '../data/connection.dart';
 import '../services/remote_session.dart';
+import '../services/vscode_launcher.dart';
+import 'resize_handle.dart';
 import '../services/file_transfer.dart';
 import '../data/file_view.dart';
 import '../services/server_monitor.dart';
@@ -59,6 +61,7 @@ class _WorkspaceState extends State<Workspace> {
   late final AppLifecycleListener lifecycle;
   int nextTerminal = 1;
   final terminalIds = <int>[];
+  final terminalDirectories = <int, String>{};
   int activeTerminal = 0;
   late final viewSettings = FileViewSettings.load(widget.store);
   ServerMonitor? monitor;
@@ -72,8 +75,6 @@ class _WorkspaceState extends State<Workspace> {
   final folderDropKeys = <String, GlobalKey>{};
   String? nativeDropPath;
   bool nativeHover = false;
-  double fileWidth = 330;
-  double terminalHeight = 240;
 
   @override
   void initState() {
@@ -189,6 +190,7 @@ class _WorkspaceState extends State<Workspace> {
       session = null;
       connecting = connection;
       terminalIds.clear();
+      terminalDirectories.clear();
       entries = [];
       editorPath = null;
       originalText = '';
@@ -287,6 +289,7 @@ class _WorkspaceState extends State<Workspace> {
     setState(() {
       session = null;
       terminalIds.clear();
+      terminalDirectories.clear();
       entries.clear();
       loading = false;
       listingGeneration++;
@@ -304,6 +307,7 @@ class _WorkspaceState extends State<Workspace> {
     setState(() {
       session = null;
       terminalIds.clear();
+      terminalDirectories.clear();
       entries.clear();
       path = '';
       pathController.clear();
@@ -622,34 +626,83 @@ class _WorkspaceState extends State<Workspace> {
     final remote = session;
     if (remote == null) return;
     await perform(
-      () => openInVSCode(
-        remote.connection.vscodeAlias,
+      () => openConnectionInVSCode(
+        remote.connection,
         target,
         directory: directory,
       ),
     );
   }
 
-  void addTerminal() {
-    terminalIds.add(nextTerminal++);
+  void addTerminal({String? directory}) {
+    final id = nextTerminal++;
+    terminalIds.add(id);
+    if (directory != null && directory.isNotEmpty) {
+      terminalDirectories[id] = directory;
+    }
     activeTerminal = terminalIds.length - 1;
   }
+
+  void openFolderTerminal(String directory) {
+    if (session == null) return;
+    changeViewSettings(() {
+      viewSettings.showTerminal = true;
+      addTerminal(directory: directory.isEmpty ? null : directory);
+    });
+  }
+
+  void closeTerminal(int index) {
+    final id = terminalIds[index];
+    final currentId = terminalIds.isEmpty ? null : terminalIds[activeTerminal];
+    terminalIds.removeAt(index);
+    terminalDirectories.remove(id);
+    activeTerminal = currentId != id
+        ? terminalIds.indexOf(currentId!)
+        : index.clamp(0, terminalIds.isEmpty ? 0 : terminalIds.length - 1);
+    if (activeTerminal < 0) activeTerminal = 0;
+  }
+
+  void resetLayout() => changeViewSettings(() {
+    viewSettings.connectionsCollapsed = false;
+    viewSettings.connectionsWidth = 224;
+    viewSettings.explorerWidth = 300;
+    viewSettings.terminalWidth = 420;
+    viewSettings.terminalMaximized = false;
+    viewSettings.showTerminal = true;
+  });
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return CallbackShortcuts(
       bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyB, control: true): () =>
+            changeViewSettings(
+              () => viewSettings.connectionsCollapsed =
+                  !viewSettings.connectionsCollapsed,
+            ),
+        const SingleActivator(
+          LogicalKeyboardKey.keyT,
+          control: true,
+          alt: true,
+        ): () =>
+            openFolderTerminal(path),
         const SingleActivator(LogicalKeyboardKey.keyH, control: true): () =>
             changeViewSettings(
               () => viewSettings.showHidden = !viewSettings.showHidden,
             ),
         const SingleActivator(LogicalKeyboardKey.keyL, control: true): () {
-          setState(() => workspaceView = 'files');
+          setState(() {
+            workspaceView = 'files';
+            viewSettings.terminalMaximized = false;
+          });
           pathFocus.requestFocus();
         },
         const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {
-          setState(() => workspaceView = 'files');
+          setState(() {
+            workspaceView = 'files';
+            viewSettings.terminalMaximized = false;
+          });
           filterFocus.requestFocus();
         },
         const SingleActivator(LogicalKeyboardKey.f5): () {
@@ -731,17 +784,35 @@ class _WorkspaceState extends State<Workspace> {
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final sidebarWidth = constraints.maxWidth < 850
-                      ? 190.0
-                      : 240.0;
+                  final sidebarWidth = viewSettings.connectionsCollapsed
+                      ? 60.0
+                      : viewSettings.connectionsWidth.clamp(
+                          190.0,
+                          (constraints.maxWidth * .3).clamp(190.0, 350.0),
+                        );
                   return Row(
                     children: [
-                      SizedBox(width: sidebarWidth, child: sidebar()),
-                      VerticalDivider(
-                        width: 1,
-                        thickness: 1,
-                        color: Theme.of(context).dividerColor,
+                      SizedBox(
+                        width: sidebarWidth,
+                        child: viewSettings.connectionsCollapsed
+                            ? connectionsRail()
+                            : sidebar(),
                       ),
+                      if (viewSettings.connectionsCollapsed)
+                        const VerticalDivider(width: 1)
+                      else
+                        HorizontalResizeHandle(
+                          key: const ValueKey('connections-resize-handle'),
+                          label: 'Resize connections',
+                          onDelta: (delta) => setState(
+                            () => viewSettings.connectionsWidth =
+                                (sidebarWidth + delta).clamp(190, 350),
+                          ),
+                          onEnd: () => changeViewSettings(() {}),
+                          onReset: () => changeViewSettings(
+                            () => viewSettings.connectionsWidth = 224,
+                          ),
+                        ),
                       Expanded(
                         child: session == null && editorPath == null
                             ? welcome()
@@ -802,6 +873,53 @@ class _WorkspaceState extends State<Workspace> {
     );
   }
 
+  Widget connectionsRail() => ColoredBox(
+    color: Theme.of(context).colorScheme.surfaceContainerLow,
+    child: Column(
+      children: [
+        const SizedBox(height: 12),
+        IconButton(
+          tooltip: 'Expand connections (Ctrl+B)',
+          onPressed: () => changeViewSettings(
+            () => viewSettings.connectionsCollapsed = false,
+          ),
+          icon: const Icon(Icons.chevron_right),
+        ),
+        IconButton(
+          tooltip: 'Add server',
+          onPressed: () => editConnection(),
+          icon: const Icon(Icons.add),
+        ),
+        const Divider(),
+        Expanded(
+          child: ListView(
+            children: [
+              for (final connection in connections)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: IconButton(
+                    tooltip: '${connection.name}\n${connection.host}',
+                    isSelected: session?.connection.id == connection.id,
+                    onPressed:
+                        connecting != null ||
+                            working ||
+                            session?.connection.id == connection.id
+                        ? null
+                        : () => connect(connection),
+                    icon: const Icon(Icons.dns_outlined),
+                    selectedIcon: Icon(
+                      Icons.dns,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+
   Widget sidebar() {
     final colors = Theme.of(context).colorScheme;
     return ColoredBox(
@@ -817,12 +935,26 @@ class _WorkspaceState extends State<Workspace> {
                 Expanded(
                   child: Text(
                     'CONNECTIONS',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 10,
                       letterSpacing: 1.8,
                       color: colors.onSurfaceVariant,
                     ),
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Collapse connections (Ctrl+B)',
+                  constraints: const BoxConstraints.tightFor(
+                    width: 28,
+                    height: 32,
+                  ),
+                  padding: EdgeInsets.zero,
+                  onPressed: () => changeViewSettings(
+                    () => viewSettings.connectionsCollapsed = true,
+                  ),
+                  icon: const Icon(Icons.chevron_left, size: 20),
                 ),
                 IconButton(
                   tooltip: 'Add server',
@@ -1199,127 +1331,161 @@ class _WorkspaceState extends State<Workspace> {
     return null;
   }
 
-  Widget remoteWorkspace() => LayoutBuilder(
-    builder: (context, constraints) {
-      final narrow = constraints.maxWidth < 700;
-      final browserWidth = fileWidth.clamp(
-        240.0,
-        (constraints.maxWidth * .5).clamp(240.0, 500.0),
-      );
-      return Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: SegmentedButton<String>(
-                      segments: const [
-                        ButtonSegment(
-                          value: 'overview',
-                          icon: Icon(Icons.monitor_heart_outlined, size: 17),
-                          label: Text('Overview'),
-                        ),
-                        ButtonSegment(
-                          value: 'files',
-                          icon: Icon(Icons.folder_open, size: 17),
-                          label: Text('Files'),
-                        ),
-                        ButtonSegment(
-                          value: 'editor',
-                          icon: Icon(Icons.edit_outlined, size: 17),
-                          label: Text('Editor'),
-                        ),
-                      ],
-                      selected: {workspaceView},
-                      onSelectionChanged: (value) =>
-                          setState(() => workspaceView = value.first),
+  Widget remoteWorkspace() => Column(
+    children: [
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(
+                      value: 'overview',
+                      icon: Icon(Icons.monitor_heart_outlined, size: 17),
+                      label: Text('Overview'),
                     ),
-                  ),
+                    ButtonSegment(
+                      value: 'files',
+                      icon: Icon(Icons.folder_open, size: 17),
+                      label: Text('Files'),
+                    ),
+                    ButtonSegment(
+                      value: 'editor',
+                      icon: Icon(Icons.edit_outlined, size: 17),
+                      label: Text('Editor'),
+                    ),
+                  ],
+                  selected: {workspaceView},
+                  onSelectionChanged: (value) => setState(() {
+                    workspaceView = value.first;
+                    viewSettings.terminalMaximized = false;
+                  }),
                 ),
-                IconButton(
-                  tooltip: viewSettings.showTerminal
-                      ? 'Hide terminal panel'
-                      : 'Show terminal panel',
-                  icon: const Icon(Icons.terminal),
-                  onPressed: () => changeViewSettings(
-                    () =>
-                        viewSettings.showTerminal = !viewSettings.showTerminal,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (working) const LinearProgressIndicator(minHeight: 2),
-          Expanded(
-            child: workspaceView == 'overview' && monitor != null
-                ? ServerDashboard(
-                    monitor: monitor!,
-                    onInterval: (seconds) {
-                      changeViewSettings(
-                        () => viewSettings.pollSeconds = seconds,
-                      );
-                      monitor!.configure(interval: seconds);
-                    },
-                  )
-                : workspaceView == 'files'
-                ? files()
-                : narrow
-                ? editor()
-                : Row(
-                    children: [
-                      SizedBox(width: browserWidth, child: files()),
-                      MouseRegion(
-                        cursor: SystemMouseCursors.resizeColumn,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onHorizontalDragUpdate: (details) => setState(
-                            () => fileWidth = (fileWidth + details.delta.dx)
-                                .clamp(240, 500),
-                          ),
-                          child: const SizedBox(
-                            width: 6,
-                            child: VerticalDivider(width: 6),
-                          ),
-                        ),
-                      ),
-                      Expanded(child: editor()),
-                    ],
-                  ),
-          ),
-          if (session != null)
-            Offstage(
-              offstage: !viewSettings.showTerminal,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  MouseRegion(
-                    cursor: SystemMouseCursors.resizeRow,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onVerticalDragUpdate: (details) => setState(
-                        () =>
-                            terminalHeight = (terminalHeight - details.delta.dy)
-                                .clamp(100, constraints.maxHeight * .55),
-                      ),
-                      child: const SizedBox(
-                        height: 6,
-                        child: Divider(height: 6),
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    height: terminalHeight.clamp(
-                      100.0,
-                      constraints.maxHeight * .45,
-                    ),
-                    child: terminals(),
-                  ),
-                ],
               ),
             ),
+            IconButton(
+              tooltip: 'Reset layout',
+              onPressed: resetLayout,
+              icon: const Icon(Icons.reset_tv, size: 20),
+            ),
+            IconButton(
+              tooltip: viewSettings.showTerminal
+                  ? 'Hide terminal panel'
+                  : 'Show terminal panel',
+              icon: const Icon(Icons.terminal),
+              onPressed: () => changeViewSettings(() {
+                viewSettings.showTerminal = !viewSettings.showTerminal;
+                viewSettings.terminalMaximized = false;
+              }),
+            ),
+          ],
+        ),
+      ),
+      if (working) const LinearProgressIndicator(minHeight: 2),
+      Expanded(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final minimum = (width * .4).clamp(0.0, 240.0);
+            final minimumPrimary = (width * .5).clamp(0.0, 300.0);
+            final maximum = (width - minimumPrimary - 8).clamp(minimum, width);
+            final terminalWidth = viewSettings.terminalWidth.clamp(
+              minimum,
+              maximum,
+            );
+            final show = session != null && viewSettings.showTerminal;
+            return Row(
+              children: [
+                SizedBox(
+                  width: show && viewSettings.terminalMaximized
+                      ? 0
+                      : show
+                      ? width - terminalWidth - 8
+                      : width,
+                  child: Offstage(
+                    offstage: show && viewSettings.terminalMaximized,
+                    child: OverflowBox(
+                      alignment: Alignment.topLeft,
+                      minWidth: show
+                          ? (width - terminalWidth - 8).clamp(0.0, width)
+                          : width,
+                      maxWidth: show
+                          ? (width - terminalWidth - 8).clamp(0.0, width)
+                          : width,
+                      minHeight: constraints.maxHeight,
+                      maxHeight: constraints.maxHeight,
+                      child: primaryWorkspace(),
+                    ),
+                  ),
+                ),
+                if (show && !viewSettings.terminalMaximized)
+                  HorizontalResizeHandle(
+                    key: const ValueKey('terminal-resize-handle'),
+                    label: 'Resize terminal',
+                    onDelta: (delta) => setState(
+                      () => viewSettings.terminalWidth = (terminalWidth - delta)
+                          .clamp(minimum, maximum),
+                    ),
+                    onEnd: () => changeViewSettings(() {}),
+                    onReset: () => changeViewSettings(
+                      () => viewSettings.terminalWidth = 420,
+                    ),
+                  ),
+                if (session != null)
+                  Offstage(
+                    offstage: !show,
+                    child: SizedBox(
+                      key: const ValueKey('right-terminal-pane'),
+                      width: viewSettings.terminalMaximized && show
+                          ? width
+                          : terminalWidth,
+                      height: constraints.maxHeight,
+                      child: terminals(),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ),
+    ],
+  );
+
+  Widget primaryWorkspace() => LayoutBuilder(
+    builder: (context, constraints) {
+      if (workspaceView == 'overview' && monitor != null) {
+        return ServerDashboard(
+          monitor: monitor!,
+          onInterval: (seconds) {
+            changeViewSettings(() => viewSettings.pollSeconds = seconds);
+            monitor!.configure(interval: seconds);
+          },
+        );
+      }
+      if (workspaceView == 'files') return files();
+      if (constraints.maxWidth < 660) return editor();
+      final maximum = (constraints.maxWidth - 300).clamp(220.0, 700.0);
+      final explorerWidth = viewSettings.explorerWidth.clamp(220.0, maximum);
+      return Row(
+        children: [
+          SizedBox(width: explorerWidth, child: files()),
+          HorizontalResizeHandle(
+            key: const ValueKey('explorer-resize-handle'),
+            label: 'Resize file explorer',
+            onDelta: (delta) => setState(
+              () => viewSettings.explorerWidth = (explorerWidth + delta).clamp(
+                220,
+                maximum,
+              ),
+            ),
+            onEnd: () => changeViewSettings(() {}),
+            onReset: () =>
+                changeViewSettings(() => viewSettings.explorerWidth = 300),
+          ),
+          Expanded(child: editor()),
         ],
       );
     },
@@ -1328,6 +1494,7 @@ class _WorkspaceState extends State<Workspace> {
   Widget files() {
     final enabled =
         session != null &&
+        !viewSettings.terminalMaximized &&
         !working &&
         !loading &&
         path.isNotEmpty &&
@@ -1501,6 +1668,31 @@ class _WorkspaceState extends State<Workspace> {
                               size: 18,
                             ),
                           ),
+                          IconButton(
+                            tooltip:
+                                'Open current folder in terminal (Ctrl+Alt+T)',
+                            onPressed: session == null
+                                ? null
+                                : () => openFolderTerminal(path),
+                            icon: const Icon(Icons.terminal, size: 18),
+                          ),
+                          IconButton(
+                            key: const ValueKey('grid-view-toggle'),
+                            tooltip: viewSettings.gridView
+                                ? 'Switch to list view'
+                                : 'Switch to grid view',
+                            isSelected: viewSettings.gridView,
+                            onPressed: () => changeViewSettings(
+                              () => viewSettings.gridView =
+                                  !viewSettings.gridView,
+                            ),
+                            icon: Icon(
+                              viewSettings.gridView
+                                  ? Icons.view_list
+                                  : Icons.grid_view,
+                              size: 20,
+                            ),
+                          ),
                           PopupMenuButton<String>(
                             tooltip: 'Sort and view options',
                             icon: const Icon(Icons.sort, size: 20),
@@ -1635,130 +1827,25 @@ class _WorkspaceState extends State<Workspace> {
                       style: const TextStyle(fontSize: 12),
                     ),
                   )
-                : ListView.builder(
+                : viewSettings.gridView
+                ? GridView.builder(
+                    key: const ValueKey('remote-grid'),
+                    padding: const EdgeInsets.all(12),
+                    gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: viewSettings.compact ? 140 : 180,
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      mainAxisExtent: viewSettings.compact ? 118 : 148,
+                    ),
                     itemCount: visible.length,
-                    itemBuilder: (context, index) {
-                      final entry = visible[index];
-                      final fullPath = p.posix.join(path, entry.filename);
-                      Widget tile = ListTile(
-                        key: ValueKey('remote-entry-$fullPath'),
-                        dense: true,
-                        visualDensity: viewSettings.compact
-                            ? const VisualDensity(vertical: -4)
-                            : VisualDensity.standard,
-                        selected: selectedPath == fullPath,
-                        selectedTileColor: Theme.of(context).colorScheme.primary
-                            .withValues(alpha: .08),
-                        contentPadding: const EdgeInsets.only(
-                          left: 18,
-                          right: 4,
-                        ),
-                        leading: Icon(
-                          entry.attr.isDirectory
-                              ? Icons.folder_rounded
-                              : entry.attr.isSymbolicLink
-                              ? Icons.link
-                              : Icons.insert_drive_file_outlined,
-                          size: 20,
-                          color: entry.attr.isDirectory
-                              ? Theme.of(context).colorScheme.primary
-                              : Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                        title: Text(
-                          entry.filename,
-                          style: const TextStyle(fontSize: 12),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: viewSettings.compact
-                            ? null
-                            : Text(
-                                '${entry.attr.isDirectory ? 'Folder' : humanBytes(entry.attr.size)} · ${modifiedText(entry)} · ${permissionsText(entry)}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 10),
-                              ),
-                        onTap: () {
-                          setState(() {
-                            selectedPath = fullPath;
-                            selectedDirectory = entry.attr.isDirectory;
-                          });
-                          openEntry(entry);
-                        },
-                        trailing: PopupMenuButton<String>(
-                          tooltip: 'File actions',
-                          iconSize: 16,
-                          enabled: !working,
-                          onSelected: (value) {
-                            if (value == 'code') {
-                              vscode(fullPath, entry.attr.isDirectory);
-                            }
-                            if (value == 'rename') renameEntry(entry);
-                            if (value == 'download') download(entry);
-                            if (value == 'properties') fileProperties(entry);
-                            if (value == 'copy') {
-                              Clipboard.setData(ClipboardData(text: fullPath));
-                              message('Path copied.');
-                            }
-                            if (value == 'export') {
-                              exportForFileManager(fullPath).then((uri) async {
-                                try {
-                                  await Process.run('xdg-open', [
-                                    File.fromUri(uri).parent.path,
-                                  ]);
-                                } catch (e) {
-                                  message('Could not open Files: $e');
-                                }
-                              }, onError: (Object _) {});
-                            }
-                          },
-                          itemBuilder: (_) => [
-                            const PopupMenuItem(
-                              value: 'code',
-                              child: Text('Open in VS Code'),
-                            ),
-                            const PopupMenuItem(
-                              value: 'rename',
-                              child: Text('Rename'),
-                            ),
-                            const PopupMenuItem(
-                              value: 'download',
-                              child: Text('Download to…'),
-                            ),
-                            const PopupMenuItem(
-                              value: 'export',
-                              child: Text('Export and reveal in Files'),
-                            ),
-                            const PopupMenuItem(
-                              value: 'copy',
-                              child: Text('Copy full path'),
-                            ),
-                            const PopupMenuItem(
-                              value: 'properties',
-                              child: Text('Properties'),
-                            ),
-                          ],
-                        ),
-                      );
-                      tile = NativeExportDrag(
-                        enabled:
-                            widget.nativeDragEnabled &&
-                            !entry.attr.isSymbolicLink,
-                        canStart: () => session != null && !working,
-                        name: entry.filename,
-                        prepare: () => exportForFileManager(fullPath),
-                        child: tile,
-                      );
-                      if (entry.attr.isDirectory) {
-                        tile = KeyedSubtree(
-                          key: folderDropKeys.putIfAbsent(
-                            fullPath,
-                            () => GlobalKey(),
-                          ),
-                          child: tile,
-                        );
-                      }
-                      return tile;
-                    },
+                    itemBuilder: (_, index) =>
+                        remoteEntry(visible[index], grid: true),
+                  )
+                : ListView.builder(
+                    key: const ValueKey('remote-list'),
+                    itemCount: visible.length,
+                    itemBuilder: (_, index) =>
+                        remoteEntry(visible[index], grid: false),
                   ),
           ),
           Padding(
@@ -1786,6 +1873,220 @@ class _WorkspaceState extends State<Workspace> {
         ],
       ),
     );
+  }
+
+  List<PopupMenuEntry<String>> entryMenu(SftpName entry) => [
+    PopupMenuItem(
+      value: 'terminal',
+      child: Text(
+        entry.attr.isDirectory ? 'Open in terminal' : 'Open parent in terminal',
+      ),
+    ),
+    PopupMenuItem(
+      value: 'code',
+      enabled: !working,
+      child: const Text('Open in VS Code'),
+    ),
+    const PopupMenuDivider(),
+    PopupMenuItem(
+      value: 'rename',
+      enabled: !working,
+      child: const Text('Rename'),
+    ),
+    PopupMenuItem(
+      value: 'download',
+      enabled: !working,
+      child: const Text('Download to…'),
+    ),
+    PopupMenuItem(
+      value: 'export',
+      enabled: !working,
+      child: const Text('Export and reveal in Files'),
+    ),
+    const PopupMenuItem(value: 'copy', child: Text('Copy full path')),
+    const PopupMenuItem(value: 'properties', child: Text('Properties')),
+  ];
+
+  void entryAction(String action, SftpName entry, String fullPath) {
+    if (action == 'terminal') {
+      openFolderTerminal(
+        entry.attr.isDirectory ? fullPath : p.posix.dirname(fullPath),
+      );
+      return;
+    }
+    if (action == 'code') vscode(fullPath, entry.attr.isDirectory);
+    if (action == 'copy') {
+      Clipboard.setData(ClipboardData(text: fullPath));
+      message('Path copied.');
+    }
+    if (action == 'properties') fileProperties(entry);
+    if (action == 'rename') renameEntry(entry);
+    if (action == 'download') download(entry);
+    if (action == 'export') {
+      exportForFileManager(fullPath).then((uri) async {
+        try {
+          await Process.run('xdg-open', [File.fromUri(uri).parent.path]);
+        } catch (e) {
+          message('Could not open Files: $e');
+        }
+      }, onError: (Object _) {});
+    }
+  }
+
+  Future<void> entryContextMenu(
+    SftpName entry,
+    String fullPath,
+    Offset position,
+  ) async {
+    setState(() {
+      selectedPath = fullPath;
+      selectedDirectory = entry.attr.isDirectory;
+    });
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final point = overlay.globalToLocal(position);
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(point.dx, point.dy, 1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: entryMenu(entry),
+    );
+    if (action != null && mounted) entryAction(action, entry, fullPath);
+  }
+
+  Widget remoteEntry(SftpName entry, {required bool grid}) {
+    final fullPath = p.posix.join(path, entry.filename);
+    final colors = Theme.of(context).colorScheme;
+    final icon = entry.attr.isDirectory
+        ? Icons.folder_rounded
+        : entry.attr.isSymbolicLink
+        ? Icons.link
+        : Icons.insert_drive_file_outlined;
+    void open() {
+      setState(() {
+        selectedPath = fullPath;
+        selectedDirectory = entry.attr.isDirectory;
+      });
+      openEntry(entry);
+    }
+
+    final menu = PopupMenuButton<String>(
+      tooltip: 'File actions',
+      iconSize: 16,
+      onSelected: (value) => entryAction(value, entry, fullPath),
+      itemBuilder: (_) => entryMenu(entry),
+    );
+    Widget tile = grid
+        ? Material(
+            color: selectedPath == fullPath
+                ? colors.primaryContainer.withValues(alpha: .35)
+                : colors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(10),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: open,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 18, 12, 10),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            icon,
+                            size: viewSettings.compact ? 32 : 42,
+                            color: entry.attr.isDirectory
+                                ? colors.primary
+                                : colors.onSurfaceVariant,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            entry.filename,
+                            maxLines: 2,
+                            textAlign: TextAlign.center,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          if (!viewSettings.compact) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              entry.attr.isDirectory
+                                  ? 'Folder'
+                                  : humanBytes(entry.attr.size),
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: colors.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  Positioned(top: 0, right: 0, child: menu),
+                ],
+              ),
+            ),
+          )
+        : ListTile(
+            dense: true,
+            visualDensity: viewSettings.compact
+                ? const VisualDensity(vertical: -4)
+                : VisualDensity.standard,
+            selected: selectedPath == fullPath,
+            selectedTileColor: colors.primary.withValues(alpha: .08),
+            contentPadding: const EdgeInsets.only(left: 18, right: 4),
+            leading: Icon(
+              icon,
+              size: 20,
+              color: entry.attr.isDirectory
+                  ? colors.primary
+                  : colors.onSurfaceVariant,
+            ),
+            title: Text(
+              entry.filename,
+              style: const TextStyle(fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: viewSettings.compact
+                ? null
+                : Text(
+                    '${entry.attr.isDirectory ? 'Folder' : humanBytes(entry.attr.size)} · ${modifiedText(entry)} · ${permissionsText(entry)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 10),
+                  ),
+            onTap: open,
+            trailing: menu,
+          );
+    tile = GestureDetector(
+      key: ValueKey('remote-entry-$fullPath'),
+      behavior: HitTestBehavior.opaque,
+      onSecondaryTapUp: (details) =>
+          entryContextMenu(entry, fullPath, details.globalPosition),
+      child: Tooltip(
+        message:
+            '$fullPath\n${modifiedText(entry)} · ${permissionsText(entry)}',
+        child: tile,
+      ),
+    );
+    tile = NativeExportDrag(
+      enabled: widget.nativeDragEnabled && !entry.attr.isSymbolicLink,
+      canStart: () => session != null && !working,
+      name: entry.filename,
+      prepare: () => exportForFileManager(fullPath),
+      child: tile,
+    );
+    if (entry.attr.isDirectory) {
+      tile = KeyedSubtree(
+        key: folderDropKeys.putIfAbsent(fullPath, () => GlobalKey()),
+        child: tile,
+      );
+    }
+    return tile;
   }
 
   Widget editor() {
@@ -1915,71 +2216,114 @@ class _WorkspaceState extends State<Workspace> {
 
   Widget terminals() => Column(
     children: [
-      SizedBox(
-        height: 40,
+      Container(
+        height: 42,
+        padding: const EdgeInsets.only(left: 12, right: 4),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerLow,
+          border: Border(
+            bottom: BorderSide(color: Theme.of(context).dividerColor),
+          ),
+        ),
         child: Row(
           children: [
-            const SizedBox(width: 16),
-            const Text(
-              'TERMINAL',
-              style: TextStyle(fontSize: 10, letterSpacing: 1.5),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: terminalIds.length,
-                itemBuilder: (context, index) => Container(
-                  margin: const EdgeInsets.only(right: 4),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(
-                        width: 2,
-                        color: activeTerminal == index
-                            ? Theme.of(context).colorScheme.primary
-                            : Colors.transparent,
-                      ),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      TextButton(
-                        onPressed: () => setState(() => activeTerminal = index),
-                        child: Text(
-                          'Shell ${terminalIds[index]}',
-                          style: const TextStyle(fontSize: 11),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Close shell ${terminalIds[index]}',
-                        icon: const Icon(Icons.close, size: 13),
-                        onPressed: () => setState(() {
-                          terminalIds.removeAt(index);
-                          activeTerminal = activeTerminal.clamp(
-                            0,
-                            terminalIds.isEmpty ? 0 : terminalIds.length - 1,
-                          );
-                        }),
-                      ),
-                    ],
-                  ),
-                ),
+            const Expanded(
+              child: Text(
+                'TERMINAL',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 10, letterSpacing: 1.5),
               ),
             ),
             IconButton(
               tooltip: 'New terminal',
+              visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.add, size: 18),
-              onPressed: () => setState(addTerminal),
+              onPressed: () => openFolderTerminal(path),
             ),
-            const SizedBox(width: 8),
+            IconButton(
+              tooltip: viewSettings.terminalMaximized
+                  ? 'Restore terminal size'
+                  : 'Maximize terminal',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(
+                viewSettings.terminalMaximized
+                    ? Icons.fullscreen_exit
+                    : Icons.fullscreen,
+                size: 18,
+              ),
+              onPressed: () => setState(
+                () => viewSettings.terminalMaximized =
+                    !viewSettings.terminalMaximized,
+              ),
+            ),
+            IconButton(
+              tooltip: 'Hide terminal',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.close, size: 17),
+              onPressed: () => changeViewSettings(() {
+                viewSettings.showTerminal = false;
+                viewSettings.terminalMaximized = false;
+              }),
+            ),
           ],
+        ),
+      ),
+      SizedBox(
+        height: 38,
+        child: ListView.builder(
+          scrollDirection: Axis.horizontal,
+          itemCount: terminalIds.length,
+          itemBuilder: (context, index) {
+            final id = terminalIds[index],
+                directory = terminalDirectories[terminalIds[index]];
+            return Container(
+              key: ValueKey('terminal-tab-$id'),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    width: 2,
+                    color: activeTerminal == index
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.transparent,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Tooltip(
+                    message: directory ?? 'SSH login directory',
+                    child: TextButton(
+                      onPressed: () => setState(() => activeTerminal = index),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 150),
+                        child: Text(
+                          directory == null
+                              ? 'Shell $id'
+                              : '${p.posix.basename(directory)} · $id',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close shell $id',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.close, size: 13),
+                    onPressed: () => setState(() => closeTerminal(index)),
+                  ),
+                ],
+              ),
+            );
+          },
         ),
       ),
       Expanded(
         child: terminalIds.isEmpty
             ? Center(
                 child: TextButton.icon(
-                  onPressed: () => setState(addTerminal),
+                  onPressed: () => openFolderTerminal(path),
                   icon: const Icon(Icons.add),
                   label: const Text('Open a terminal'),
                 ),
@@ -1987,10 +2331,15 @@ class _WorkspaceState extends State<Workspace> {
             : IndexedStack(
                 index: activeTerminal,
                 children: [
-                  for (final id in terminalIds)
+                  for (var index = 0; index < terminalIds.length; index++)
                     SshTerminal(
-                      key: ValueKey('${session.hashCode}-$id'),
+                      key: ValueKey(
+                        '${session.hashCode}-${terminalIds[index]}',
+                      ),
                       session: session!,
+                      initialDirectory: terminalDirectories[terminalIds[index]],
+                      active:
+                          viewSettings.showTerminal && activeTerminal == index,
                     ),
                 ],
               ),
