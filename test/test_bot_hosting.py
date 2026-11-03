@@ -34,6 +34,61 @@ class HostingTests(unittest.TestCase):
             request['id'] = bot['id']
         return self.manager.handle(request)
 
+    def legacy_bot(self):
+        legacy = manager(self.home, self.runner)
+        legacy.base = self.home / '.local/share/zeravi/bots'
+        legacy.legacy_base = self.home / 'unused-legacy-directory'
+        bot = legacy.handle(dict(action='deploy', zipPath=str(self.upload()), projectRoot='project', name='Existing bot'))
+        return legacy, bot
+
+    def test_new_projects_live_in_visible_home_folder(self):
+        bot = self.deploy()
+        self.assertEqual(self.manager.base, self.home / 'telegrambots')
+        self.assertTrue((self.home / 'telegrambots' / bot['id'] / 'current/app/main.py').is_file())
+
+    def test_migration_preserves_running_service_data_and_absolute_paths(self):
+        legacy, bot = self.legacy_bot()
+        old_root = legacy.bot_root(bot['id'])
+        unit = legacy.owned_unit(bot['id'])
+        old_unit = unit.read_text()
+        (old_root / 'current/app/data/seed.txt').write_text('edited data')
+        self.runner.calls.clear()
+        listing = self.manager.handle(dict(action='list'))
+        root = self.manager.bot_root(bot['id'])
+        self.assertEqual(listing['bots'][0]['path'], str(root / 'current/app'))
+        self.assertEqual(root.parent, self.home / 'telegrambots')
+        self.assertTrue(old_root.is_symlink())
+        self.assertTrue((old_root / 'current/venv/bin/python').is_file())
+        self.assertEqual((root / 'current/app/data/seed.txt').read_text(), 'edited data')
+        self.assertEqual(unit.read_text(), old_unit)
+        self.assertFalse(any(args[:3] == ['systemctl', '--user', 'stop'] for args, _ in self.runner.calls))
+        self.manager.handle(dict(action='list'))  # Idempotent on each refresh.
+        self.manager.handle(dict(action='configure', id=bot['id']))
+        self.assertIn(str(root / 'current/app'), unit.read_text())
+        archived = self.manager.handle(dict(action='remove', id=bot['id']))
+        self.assertTrue((Path(archived['archive']) / 'shared/data/seed.txt').is_file())
+        self.assertEqual(self.manager.handle(dict(action='list'))['bots'], [])
+        self.assertFalse(old_root.is_symlink())
+
+    def test_migration_never_overwrites_a_destination_folder(self):
+        legacy, bot = self.legacy_bot()
+        target = self.manager.base / bot['id']
+        target.mkdir(parents=True)
+        (target / 'personal.txt').write_text('keep this')
+        with self.assertRaisesRegex(hosting.HostingError, 'already exists'):
+            self.manager.handle(dict(action='list'))
+        self.assertEqual((target / 'personal.txt').read_text(), 'keep this')
+        self.assertTrue((legacy.base / bot['id'] / 'current/app/main.py').is_file())
+        self.assertFalse((legacy.base / bot['id']).is_symlink())
+
+    def test_migration_waits_for_existing_operations(self):
+        legacy, bot = self.legacy_bot()
+        with legacy.lock():
+            with self.assertRaisesRegex(hosting.HostingError, 'older bot operation'):
+                self.manager.handle(dict(action='list'))
+        self.assertFalse((legacy.base / bot['id']).is_symlink())
+        self.assertEqual(self.manager.handle(dict(action='list'))['bots'][0]['id'], bot['id'])
+
     def test_lifecycle_update_rollback_and_archive_preserve_data(self):
         first = self.deploy()
         self.assertEqual(first['state'], 'active')

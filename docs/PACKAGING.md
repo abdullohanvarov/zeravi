@@ -13,7 +13,7 @@ python3 tool/build_deb.py
 ```
 
 This runs the Flutter release build and writes the package and SHA256 checksum
-to `build/packages/`. Version `0.2.0+1` becomes Debian version `0.2.0-1`.
+to `build/packages/`. Version `0.2.1+1` becomes Debian version `0.2.1-1`.
 
 To package a release bundle that has already been built and checked:
 
@@ -34,7 +34,7 @@ an older target distribution rather than weakening those requirements by hand.
 For the amd64 preview package:
 
 ```sh
-sudo apt install ./build/packages/zeravi_0.2.0-1_amd64.deb
+sudo apt install ./build/packages/zeravi_0.2.1-1_amd64.deb
 ```
 
 Search the applications menu for **Zeravi**, or run `zeravi` from a terminal.

@@ -65,6 +65,11 @@ is shown as failed/restarting; inspect its logs and use rollback if needed.
 
 ## Manage bots
 
+Use **Open project in Files** in a bot’s menu to browse/edit its current code,
+or open `~/telegrambots/<id>/current/app` through SFTP. Stop the bot before manual
+changes and restart afterward; ZIP updates replace code, so keep your source ZIP
+in sync.
+
 Each card shows process state, PID, current RAM, automatic restart count, boot
 setting, and the last deployment time. Status refreshes every eight seconds
 while Bots is visible.
@@ -96,7 +101,7 @@ multiple polling processes with the same token.
 All bots belong to the connected SSH user:
 
 ```text
-~/.local/share/zeravi/bots/<id>/
+~/telegrambots/<id>/
   manifest.json
   config.json             # private runtime settings, including environment values
   environment             # private systemd EnvironmentFile
@@ -159,3 +164,15 @@ flutter test tool/bot_hosting_preview_test.dart tool/workspace_preview_test.dart
 The fixture uses real loopback SSH/SFTP and the production hosting manager with
 simulated OS commands. It never installs bot dependencies or changes real user
 services. Production deployments still require validation on your target VPS.
+
+## Upgrading from the previous storage location
+
+On the first hosting request, existing bot directories are moved from
+`~/.local/share/zeravi/bots` into `~/telegrambots`. Compatibility links remain at
+the old paths so running services, existing virtual environments and persistent
+data links continue working without a restart. Do not remove these links while
+old releases are retained. Newly generated service settings use the new path.
+
+Migration waits for previous hosting operations and never overwrites destination
+folders. If a bot ID already exists in the new location, move the conflicting
+folder aside and refresh. Removed bots are archived in `~/telegrambots/_archives`.

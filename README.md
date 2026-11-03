@@ -58,7 +58,8 @@ Passwords and key passphrases are requested when connecting and are not saved.
 Connect to a VPS, open **Bots**, then **Deploy ZIP**. Include `requirements.txt`
 and a Python entry point such as `main.py`. Configure your token as an environment
 variable, choose persistent data folders, and deploy. Start, stop, restart, update,
-inspect logs, edit settings, or roll back from the bot card.
+inspect logs, edit settings, or roll back from the bot card. Projects are stored
+in `~/telegrambots` on the VPS; **Open project in Files** takes you to editable code.
 
 The VPS needs Python virtual environments, systemd user services and linger.
 **Server setup** checks readiness and shows the one-time setup commands.

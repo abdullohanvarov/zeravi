@@ -1497,6 +1497,10 @@ class _WorkspaceState extends State<Workspace> {
       if (workspaceView == 'bots' && hosting != null) {
         return BotHostingPanel(
           controller: hosting!,
+          onOpenFiles: (directory) {
+            setState(() => workspaceView = 'files');
+            unawaited(loadDirectory(directory));
+          },
           onOpenTerminal: (directory) =>
               openFolderTerminal(directory ?? homePath ?? path),
         );

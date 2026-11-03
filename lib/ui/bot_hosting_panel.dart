@@ -13,9 +13,11 @@ class BotHostingPanel extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onOpenTerminal,
+    this.onOpenFiles,
   });
   final BotHostingController controller;
   final ValueChanged<String?> onOpenTerminal;
+  final ValueChanged<String>? onOpenFiles;
   @override
   State<BotHostingPanel> createState() => _BotHostingPanelState();
 }
@@ -231,7 +233,7 @@ class _BotHostingPanelState extends State<BotHostingPanel> {
         ),
         const SizedBox(height: 8),
         const Text(
-          'Host Python Telegram bots on this VPS. Processes keep running when Zeravi closes. Use long polling, or configure your own HTTPS endpoint for webhooks.',
+          'Projects live in ~/telegrambots. Processes keep running when Zeravi closes. Use long polling, or configure your own HTTPS endpoint for webhooks.',
         ),
         const SizedBox(height: 16),
         if (host.refreshing) const LinearProgressIndicator(),
@@ -409,6 +411,8 @@ class _BotHostingPanelState extends State<BotHostingPanel> {
                     switch (value) {
                       case 'settings':
                         configure(bot);
+                      case 'files':
+                        widget.onOpenFiles?.call(bot.path);
                       case 'terminal':
                         widget.onOpenTerminal(bot.path);
                       case 'copy':
@@ -425,6 +429,11 @@ class _BotHostingPanelState extends State<BotHostingPanel> {
                       value: 'settings',
                       child: Text('Settings & environment'),
                     ),
+                    if (widget.onOpenFiles != null)
+                      const PopupMenuItem(
+                        value: 'files',
+                        child: Text('Open project in Files'),
+                      ),
                     const PopupMenuItem(
                       value: 'terminal',
                       child: Text('Open project in terminal'),

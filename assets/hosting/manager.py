@@ -165,7 +165,8 @@ def extract_project(archive_path, destination, project_root, entrypoint):
 class HostingManager:
     def __init__(self, home=None, runner=None, event=None):
         self.home = Path(home or Path.home()).resolve()
-        self.base = self.home / '.local/share/zeravi/bots'
+        self.base = self.home / 'telegrambots'
+        self.legacy_base = self.home / '.local/share/zeravi/bots'
         self.units = self.home / '.config/systemd/user'
         self.runner = runner
         self.event = event or (lambda kind, **data: None)
@@ -264,6 +265,53 @@ class HostingManager:
             except BlockingIOError:
                 raise HostingError('Another bot operation is running. Wait for it to finish.')
             yield
+        finally:
+            os.close(fd)
+
+    def prepare_storage(self):
+        # Keep old absolute venv shebangs, data links and service paths working.
+        # Projects move physically; private compatibility links stay at old paths.
+        if self.base.is_symlink():
+            raise HostingError('The telegrambots directory must not be a symbolic link.')
+        self.base.mkdir(parents=True, exist_ok=True, mode=0o700)
+        legacy = self.legacy_base
+        if legacy.is_symlink():
+            if legacy.resolve() == self.base.resolve():
+                return
+            raise HostingError('The old bot storage is a symbolic link. Move it manually before continuing.')
+        if not legacy.exists():
+            return
+        fd = os.open(legacy / '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise HostingError('An older bot operation is running. Wait for it to finish, then refresh.')
+            with self.lock():
+                pending = []
+                for source in sorted(legacy.iterdir()):
+                    if source.name == '.lock':
+                        continue
+                    target = self.base / source.name
+                    if source.is_symlink() and source.readlink() == target and not target.is_symlink():
+                        if not target.exists():
+                            source.unlink()  # Clean compatibility links after removal.
+                            continue
+                        if target.is_dir():
+                            continue
+                    if source.is_symlink() or not source.is_dir() or not (ID.fullmatch(source.name) or source.name == '_archives'):
+                        raise HostingError('Unexpected files in the old bot directory; move them aside before migration.')
+                    if target.exists() or target.is_symlink():
+                        raise HostingError('Cannot migrate ' + source.name + ': that name already exists in ~/telegrambots. No files were overwritten.')
+                    pending.append((source, target))
+                for source, target in pending:
+                    source.rename(target)
+                    try:
+                        source.symlink_to(target, target_is_directory=True)
+                    except BaseException:
+                        target.rename(source)
+                        raise
+                    self.event('progress', message='Moved ' + source.name + ' into ~/telegrambots')
         finally:
             os.close(fd)
 
@@ -647,6 +695,7 @@ WantedBy=default.target
         return dict(removed=True, archive=archive)
 
     def handle(self, request):
+        self.prepare_storage()
         action = request.get('action')
         if action == 'list':
             return self.listing()

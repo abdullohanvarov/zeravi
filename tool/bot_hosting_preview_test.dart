@@ -81,6 +81,7 @@ void main() {
         tester.view.physicalSize = const Size(1200, 900);
         tester.view.devicePixelRatio = 1;
         final boundaryKey = GlobalKey();
+        String? openedProject;
         await tester.pumpWidget(
           RepaintBoundary(
             key: boundaryKey,
@@ -93,7 +94,11 @@ void main() {
                 useMaterial3: true,
               ),
               home: Scaffold(
-                body: BotHostingPanel(controller: host, onOpenTerminal: (_) {}),
+                body: BotHostingPanel(
+                  controller: host,
+                  onOpenFiles: (path) => openedProject = path,
+                  onOpenTerminal: (_) {},
+                ),
               ),
             ),
           ),
@@ -137,6 +142,14 @@ void main() {
         await tester.tap(find.text('Close'));
         await tick();
         await tick();
+        await tester.tap(find.byTooltip('Manage Customer support bot'));
+        await tick();
+        await tick();
+        await tester.tap(find.text('Open project in Files'));
+        await tick();
+        await tick();
+        expect(openedProject, contains('/telegrambots/'));
+        expect(openedProject, endsWith('/current/app'));
         await tester.tap(find.byTooltip('Manage Customer support bot'));
         await tick();
         await tick();
