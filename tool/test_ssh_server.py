@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 import time
 import asyncssh
+from hosting_test_support import FakeServer, manager
 
 async def main():
     with tempfile.TemporaryDirectory(prefix='zeravi-ssh-') as temporary:
@@ -31,9 +32,23 @@ async def main():
             def public_key_auth_supported(self): return True
             def validate_public_key(self, username, key):
                 return username == 'tester' and key == client_key.convert_to_public()
+        hosting_runner = FakeServer()
         async def shell(process):
             if process.command:
-                if '__Z_HOST__' in process.command:
+                if 'zeravi-hosting' in process.command:
+                    # This fixture invokes only the checked-in helper with fake OS
+                    # commands; it never executes the client's shell command.
+                    request = json.loads(await process.stdin.read())
+                    if 'zipPath' in request:
+                        request['zipPath'] = str(remote / Path(request['zipPath']).name)
+                    def event(kind, **values):
+                        process.stdout.write(json.dumps(dict(event=kind, **values)) + '\n')
+                    try:
+                        result = manager(remote, hosting_runner, event).handle(request)
+                        event('result', data=result)
+                    except Exception as error:
+                        event('error', message=str(error))
+                elif '__Z_HOST__' in process.command:
                     ticks = int(time.monotonic() * 100)
                     process.stdout.write(f'''__Z_HOST__
 zeravi-fixture

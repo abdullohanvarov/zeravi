@@ -14,6 +14,10 @@ No Zeravi backend or server agent is required.
 | `lib/services/file_transfer.dart` | Recursive preflight, collision checks and staged copies |
 | `lib/services/export_cache.dart` | Completed local copies for native file-manager exports |
 | `lib/services/server_monitor.dart` | Bounded Linux probes, snapshot parsing, deltas and polling |
+| `lib/data/bot_project.dart` | ZIP metadata validation and hosting models |
+| `lib/services/bot_hosting.dart` | SSH hosting protocol, SFTP ZIP upload and operation state |
+| `assets/hosting/manager.py` | Transient remote release builder and managed user-service operations |
+| `lib/ui/bot_hosting_panel.dart` | Deployment, runtime settings, readiness, bot cards and logs |
 | `lib/ui/workspace.dart` | Navigation, file browser, editor, shortcuts and user prompts |
 | `lib/ui/server_dashboard.dart` | Resource cards, history, filesystem and process tables |
 | `lib/ui/transfer_widgets.dart` | Lazy native file-URI drag provider |
@@ -69,3 +73,24 @@ explorer, and the terminal; preferences clamp persisted widths for smaller windo
 Grid and list entries share the same context-menu and native drag implementations.
 Opening a folder terminal sends a safely shell-quoted `cd` command to a fresh
 interactive SSH shell; no remote file name is interpreted as shell syntax.
+
+## Bot hosting
+
+The app sends a static Python helper over an SSH execution channel. Request JSON
+arrives on stdin; tokens and project settings are not interpolated into shell
+commands. Responses are newline-delimited JSON progress/result/error events.
+Uploads use exclusive private SFTP files and are independently validated remotely.
+The helper uses argv arrays for pip/systemd/journal commands, a server-side mutation
+lock, private metadata and environment files, and immutable release directories.
+
+A release is created at its final path before building the virtual environment,
+so environment scripts retain valid absolute paths. Dependencies install before
+stopping an existing bot. Activation switches a relative current symlink and
+updates the user service; startup-command failures restore the previous release
+and settings when possible. Runtime crashes are reported through service state
+and journal logs. Shared data is retained independently of release selection.
+
+The helper is transient; the bot itself continues as a systemd user service.
+Normal app exit/disconnect is blocked during a hosting operation. Connection loss
+can leave the operation completed or in progress remotely; reconnect and refresh
+before retrying. See BOT_HOSTING.md for readiness, storage and security limits.

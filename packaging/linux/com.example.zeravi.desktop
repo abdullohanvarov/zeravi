@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Zeravi
+GenericName=Remote server workspace
+Comment=Manage remote servers, files and terminals over SSH
+Exec=/usr/bin/zeravi
+TryExec=/usr/bin/zeravi
+Icon=zeravi
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=SSH;SFTP;VPS;Server;Terminal;Remote;
+StartupNotify=true
+StartupWMClass=com.example.zeravi

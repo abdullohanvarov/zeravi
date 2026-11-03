@@ -148,6 +148,11 @@ void main() {
           await tester.tap(find.byTooltip('Pause monitoring'));
           await tick();
           expect(find.text('Monitoring paused'), findsOneWidget);
+          await tester.tap(find.text('Bots'));
+          await until(find.text('Virtual environments'));
+          expect(find.text('Deploy ZIP'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          await shot('zeravi-bots-workspace');
           await tester.tap(find.text('Files'));
           await tick();
           expect(find.text('LOCAL FILES'), findsNothing);

@@ -98,3 +98,18 @@ hideable terminal that retains live shells. See USER_EXPECTATIONS.md for scope.
 The static monitoring command and model parsers are tested with synthetic Linux
 data. Export tests verify complete file/folder trees before URI handoff. Actual
 Nautilus drag gestures remain part of the manual desktop smoke test.
+
+## Python bot hosting — 3 November 2026
+
+Implemented the Bots workspace: validated ZIP deployment, isolated requirements
+installation, systemd user services, runtime settings and environment variables,
+start/stop/restart, resource/status polling, journal logs, persistent paths, ZIP
+updates, previous-release rollback and archive-first removal. Setup checks explain
+Python, user-manager and linger prerequisites. No real VPS is modified by tests.
+
+Validation covers the remote lifecycle and failure recovery with temporary files
+and simulated OS commands, real SSH/SFTP protocol integration, service-file syntax
+with systemd-analyze, and connected Flutter workflow/preview checks. Production
+VPS compatibility remains a separate deployment check. Future hosting work includes
+release retention policies, backup automation, multiple Python versions and
+webhook/proxy provisioning.

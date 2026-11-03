@@ -22,6 +22,8 @@ import 'server_dashboard.dart';
 import 'transfer_widgets.dart';
 import 'connection_dialog.dart';
 import 'ssh_terminal.dart';
+import '../services/bot_hosting.dart';
+import 'bot_hosting_panel.dart';
 
 class Workspace extends StatefulWidget {
   const Workspace({
@@ -65,6 +67,12 @@ class _WorkspaceState extends State<Workspace> {
   int activeTerminal = 0;
   late final viewSettings = FileViewSettings.load(widget.store);
   ServerMonitor? monitor;
+  BotHostingController? hosting;
+  bool get hostingBusy => hosting?.busy == true;
+  void hostingChanged() {
+    if (mounted) setState(() {});
+  }
+
   final exports = ExportCache();
   String workspaceView = 'overview';
   final pathFocus = FocusNode();
@@ -81,10 +89,8 @@ class _WorkspaceState extends State<Workspace> {
     super.initState();
     lifecycle = AppLifecycleListener(
       onExitRequested: () async {
-        if (working) {
-          message(
-            'Wait for the current file operation to finish before closing.',
-          );
+        if (working || hostingBusy) {
+          message('Wait for the current operation to finish before closing.');
           return AppExitResponse.cancel;
         }
         return await discardChanges()
@@ -101,6 +107,8 @@ class _WorkspaceState extends State<Workspace> {
   @override
   void dispose() {
     lifecycle.dispose();
+    hosting?.dispose();
+    hosting = null;
     monitor?.dispose();
     session?.close();
     pathFocus.dispose();
@@ -180,7 +188,11 @@ class _WorkspaceState extends State<Workspace> {
   }
 
   Future<void> connect(ServerConnection connection) async {
-    if (connecting != null || working || !await discardChanges() || !mounted) {
+    if (connecting != null ||
+        working ||
+        hostingBusy ||
+        !await discardChanges() ||
+        !mounted) {
       return;
     }
     final secret = await requestSecret(context, connection);
@@ -200,6 +212,8 @@ class _WorkspaceState extends State<Workspace> {
       fileError = null;
       listingGeneration++;
     });
+    hosting?.dispose();
+    hosting = null;
     monitor?.dispose();
     monitor = null;
     history.clear();
@@ -269,6 +283,8 @@ class _WorkspaceState extends State<Workspace> {
         addTerminal();
       });
       monitor = ServerMonitor(remote.client, seconds: viewSettings.pollSeconds);
+      hosting = BotHostingController(BotHostingService(remote))
+        ..addListener(hostingChanged);
       remote.client.done.then(
         (_) => connectionLost(remote),
         onError: (Object error) => connectionLost(remote, error),
@@ -284,6 +300,8 @@ class _WorkspaceState extends State<Workspace> {
 
   void connectionLost(RemoteSession remote, [Object? error]) {
     if (!mounted || session != remote) return;
+    hosting?.dispose();
+    hosting = null;
     monitor?.dispose();
     monitor = null;
     setState(() {
@@ -300,8 +318,10 @@ class _WorkspaceState extends State<Workspace> {
   }
 
   Future<void> disconnect() async {
-    if (working || !await discardChanges() || !mounted) return;
+    if (working || hostingBusy || !await discardChanges() || !mounted) return;
     final remote = session;
+    hosting?.dispose();
+    hosting = null;
     monitor?.dispose();
     monitor = null;
     setState(() {
@@ -386,7 +406,7 @@ class _WorkspaceState extends State<Workspace> {
       await loadDirectory(fullPath);
       return;
     }
-    if (working || !await discardChanges() || !mounted) return;
+    if (working || hostingBusy || !await discardChanges() || !mounted) return;
     final remote = session;
     if (remote == null) return;
     await perform(() async {
@@ -768,7 +788,7 @@ class _WorkspaceState extends State<Workspace> {
                     ),
                     const SizedBox(width: 12),
                     TextButton.icon(
-                      onPressed: working ? null : disconnect,
+                      onPressed: working || hostingBusy ? null : disconnect,
                       icon: const Icon(Icons.power_settings_new, size: 16),
                       label: const Text('Disconnect'),
                     ),
@@ -988,7 +1008,11 @@ class _WorkspaceState extends State<Workspace> {
                           borderRadius: BorderRadius.circular(10),
                           child: InkWell(
                             borderRadius: BorderRadius.circular(10),
-                            onTap: active || connecting != null || working
+                            onTap:
+                                active ||
+                                    connecting != null ||
+                                    working ||
+                                    hostingBusy
                                 ? null
                                 : () => connect(connection),
                             child: Padding(
@@ -1343,6 +1367,11 @@ class _WorkspaceState extends State<Workspace> {
                 child: SegmentedButton<String>(
                   segments: const [
                     ButtonSegment(
+                      value: 'bots',
+                      icon: Icon(Icons.smart_toy_outlined, size: 17),
+                      label: Text('Bots'),
+                    ),
+                    ButtonSegment(
                       value: 'overview',
                       icon: Icon(Icons.monitor_heart_outlined, size: 17),
                       label: Text('Overview'),
@@ -1463,6 +1492,13 @@ class _WorkspaceState extends State<Workspace> {
             changeViewSettings(() => viewSettings.pollSeconds = seconds);
             monitor!.configure(interval: seconds);
           },
+        );
+      }
+      if (workspaceView == 'bots' && hosting != null) {
+        return BotHostingPanel(
+          controller: hosting!,
+          onOpenTerminal: (directory) =>
+              openFolderTerminal(directory ?? homePath ?? path),
         );
       }
       if (workspaceView == 'files') return files();

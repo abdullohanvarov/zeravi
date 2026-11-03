@@ -19,7 +19,7 @@
 
 ## Later
 
-Service controls and live logs, SSH tunnels, deployment, multi-selection, transfer
+General service administration, SSH tunnels, other deployment types, multi-selection, transfer
 resume/cancellation, richer permission editing, and syntax highlighting remain
 separate roadmap items. Native dragging is a copy operation, never a remote move.
 
@@ -34,3 +34,18 @@ separate roadmap items. Native dragging is a copy operation, never a remote move
 - [x] Resize connections, the editor explorer and terminal with saved widths.
 - [x] Collapse connections into an icon rail.
 - [x] Reset layout, double-click splitters to reset, and label tabs by folder.
+
+## Python Telegram bot hosting
+
+- [x] Inspect a ZIP and select its requirements folder and Python entry point.
+- [x] Upload through SFTP and build a separate Python environment on the VPS.
+- [x] Show deployment progress and dependency installation output.
+- [x] Start, stop, restart and inspect managed user-service status and resources.
+- [x] View/search/copy recent logs with automatic refresh.
+- [x] Edit private environment variables, boot startup and restart policy.
+- [x] Preserve configured data paths across ZIP updates.
+- [x] Keep the old process running while new dependencies install.
+- [x] Roll back code/dependencies and archive projects on removal by default.
+- [x] Check VPS readiness and provide one-time setup guidance.
+
+See [BOT_HOSTING.md](BOT_HOSTING.md) for prerequisites and current limits.

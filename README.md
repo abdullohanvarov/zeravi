@@ -13,6 +13,8 @@ Flutter scaffolding; a web build is not supported.
 
 ## What is included
 
+- **Bots:** deploy Python Telegram bot ZIPs, install requirements in isolated virtual
+  environments, manage persistent services, logs, environment variables and rollbacks.
 - Saved SSH profiles, key/password authentication and explicit host-key trust.
 - **Overview:** live CPU history, RAM, swap, load, uptime and interface traffic.
 - Filesystem capacity and top-process views, with refresh/pause/polling controls.
@@ -48,6 +50,20 @@ Choose **Add connection**, enter the server hostname/IP, port and username, and
 select an existing private key or password authentication. Check the first-use
 host fingerprint against your server console or administrator before trusting it.
 Passwords and key passphrases are requested when connecting and are not saved.
+
+## Python Telegram bot hosting
+
+![Zeravi bot hosting](docs/images/bot-hosting.png)
+
+Connect to a VPS, open **Bots**, then **Deploy ZIP**. Include `requirements.txt`
+and a Python entry point such as `main.py`. Configure your token as an environment
+variable, choose persistent data folders, and deploy. Start, stop, restart, update,
+inspect logs, edit settings, or roll back from the bot card.
+
+The VPS needs Python virtual environments, systemd user services and linger.
+**Server setup** checks readiness and shows the one-time setup commands.
+See [the hosting guide](docs/BOT_HOSTING.md) for prerequisites, deployment limits,
+data storage, security and recovery.
 
 ## Daily workflow
 
@@ -161,8 +177,17 @@ The preview supports one connected server and one plain-text editor alongside
 multiple shells. Editor checks and writes are not atomic; an interrupted editor
 save can leave partial content. Changed host keys require manual investigation;
 there is no reset-trust button. SSH agent/ProxyJump, transfer resume/cancellation,
-services/log controls, tunnels, deployment and editor tabs remain planned.
+general service administration, SSH tunnels, other deployment types and editor
+tabs remain planned. Python bot deployment and its service/log controls are available
+in Bots.
 
 - [Expected desktop workflow and implemented checklist](docs/USER_EXPECTATIONS.md)
 - [Architecture and data handling](docs/ARCHITECTURE.md)
 - [Project plan](docs/PROJECT_PLAN.md)
+
+
+## Debian installer
+
+Build an Ubuntu installer with `python3 tool/build_deb.py`, then install the
+resulting `.deb` from `build/packages/`. See [packaging and installation](docs/PACKAGING.md)
+for requirements, update/removal instructions and the target-distribution limits.
